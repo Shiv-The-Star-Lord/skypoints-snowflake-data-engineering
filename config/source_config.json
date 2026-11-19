@@ -1,0 +1,61 @@
+
+{
+  "project": "SKYPOINTS",
+  "sources": [
+    {
+      "source_id": "IND_MEMBERS",
+      "file_name": "IND.csv",
+      "format": "CSV",
+      "entity": "MEMBER_PROFILE",
+      "target_table": "RAW_MEMBER_PROFILES",
+      "enabled": true,
+      "options": {
+        "header": true,
+        "delimiter": ",",
+        "encoding": "UTF-8"
+      }
+    },
+    {
+      "source_id": "USA_MEMBERS",
+      "file_name": "USA.csv",
+      "format": "CSV",
+      "entity": "MEMBER_PROFILE",
+      "target_table": "RAW_MEMBER_PROFILES",
+      "enabled": true,
+      "options": {
+        "header": true,
+        "delimiter": ",",
+        "encoding": "UTF-8"
+      }
+    },
+    {
+      "source_id": "AUS_MEMBERS",
+      "file_name": "AUS.xlsx",
+      "format": "XLSX",
+      "entity": "MEMBER_PROFILE",
+      "target_table": "RAW_MEMBER_PROFILES",
+      "enabled": true,
+      "options": {}
+    },
+    {
+      "source_id": "XML_MEMBERS",
+      "file_name": "member_profiles.xml",
+      "format": "XML",
+      "entity": "MEMBER_PROFILE",
+      "target_table": "RAW_MEMBER_PROFILES",
+      "enabled": true,
+      "options": {}
+    },
+    {
+      "source_id": "REDEMPTION_TRANSACTIONS",
+      "file_name": "redemption_transactions.json",
+      "format": "JSON",
+      "entity": "REDEMPTION",
+      "target_table": "RAW_REDEMPTIONS",
+      "enabled": true,
+      "options": {
+        "record_type": "NESTED_JSON"
+      }
+    }
+  ]
+}
