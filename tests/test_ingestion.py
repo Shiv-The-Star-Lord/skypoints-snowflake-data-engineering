@@ -70,3 +70,32 @@ def test_csv_reader_and_header_mapper():
 
 if __name__ == "__main__":
     test_csv_reader_and_header_mapper()
+
+def test_reorder_standard_columns():
+    import pandas as pd
+
+    from python.ingestion.header_mapper import reorder_standard_columns
+
+    df = pd.DataFrame({
+        "country_code": ["IND"],
+        "member_name": ["Rahul"],
+        "member_id": ["IND1001"],
+        "enrollment_date": ["2022-01-15"]
+    })
+
+    result = reorder_standard_columns(df)
+
+    expected_order = [
+        "member_id",
+        "member_name",
+        "enrollment_date",
+        "country_code"
+    ]
+
+    assert result.columns.tolist() == expected_order
+
+    print("Column reordering test passed!")
+
+
+if __name__ == "__main__":
+    test_reorder_standard_columns()
