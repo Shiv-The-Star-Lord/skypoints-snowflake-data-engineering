@@ -1,3 +1,6 @@
+# Snowflake Workspaces (managed) - per-user Notebook settings
+.snowflake/settings.json
+.snowflake/.folder
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
