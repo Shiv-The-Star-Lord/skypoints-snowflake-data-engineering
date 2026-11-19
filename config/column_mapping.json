@@ -1,0 +1,53 @@
+
+{
+  "member_id": [
+    "Member_Id",
+    "Member ID",
+    "ID",
+    "Unique ID"
+  ],
+  "member_name": [
+    "Member_Name",
+    "Member Name",
+    "Name"
+  ],
+  "date_of_birth": [
+    "DOB",
+    "Date of Birth",
+    "Birth"
+  ],
+  "tier_code": [
+    "Tier_Code",
+    "TierCode",
+    "TierCode",
+    "Tier",
+    "Tier Type"
+  ],
+  "enrollment_date": [
+    "Enrollment_Date",
+    "Enrollment Date",
+    "EnrollmentDate",
+    "Date of Enrollment",
+    "Enrollment"
+  ],
+  "last_flight_date": [
+    "Last_Flight_Date",
+    "Last Flight Date",
+    "Flight_Date",
+    "Date of Flight",
+    "Flight Date",
+    "FlightDate"
+  ],
+  "member_type": [
+    "Member_Type",
+    "Member Type",
+    "Corporate/Individual",
+    "Corporate or Individual"
+    "Corporate"
+  ],
+  "country_code": [
+    "Country",
+    "Country_Code",
+    "Country Code"
+  ]
+}
