@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 from python.ingestion.file_reader import read_file
-from python.ingestion.header_mapper import standardize_headers
+from python.ingestion.header_mapper import (standardize_headers,reorder_standard_columns)
 from python.ingestion.data_validator import validate_member_data
 
 
@@ -42,7 +42,8 @@ def run_member_ingestion(file_path, mapping_path, file_format=None):
         df,
         mapping_path
     )
-
+    standardized_df = reorder_standard_columns(standardized_df)
+    
     print("Header standardization completed.")
 
     # Step 3: Validate member records

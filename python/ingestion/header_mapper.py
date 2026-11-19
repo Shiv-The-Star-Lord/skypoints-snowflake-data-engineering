@@ -92,3 +92,39 @@ def standardize_headers(df, mapping_path):
     ]
 
     return standardized_df, missing_columns
+
+
+STANDARD_COLUMN_ORDER = [
+    "member_id",
+    "member_name",
+    "date_of_birth",
+    "tier_code",
+    "enrollment_date",
+    "last_flight_date",
+    "agent_name",
+    "state_code",
+    "postal_code",
+    "is_active",
+    "member_type",
+    "country_code"
+]
+
+
+def reorder_standard_columns(df):
+    """
+    Arrange standardized columns in a consistent order.
+    Keep any additional source columns at the end.
+    """
+    standard_columns = [
+        column
+        for column in STANDARD_COLUMN_ORDER
+        if column in df.columns
+    ]
+
+    extra_columns = [
+        column
+        for column in df.columns
+        if column not in STANDARD_COLUMN_ORDER
+    ]
+
+    return df[standard_columns + extra_columns]
