@@ -1,11 +1,14 @@
 
+import sys
 from pathlib import Path
+
+# Add the project root to Python's import path
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from python.ingestion.file_reader import read_file
 from python.ingestion.header_mapper import standardize_headers
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 CSV_FILE = PROJECT_ROOT / "data/sample/IND.csv"
 MAPPING_FILE = PROJECT_ROOT / "config/column_mapping.json"
@@ -58,7 +61,6 @@ def test_csv_reader_and_header_mapper():
     # Step 7: Validate nullable last flight date
     assert standardized_df["last_flight_date"].isna().sum() == 1
 
-    # Step 8: Display missing optional columns
     print("\nMissing standard columns:")
     print(missing_columns)
 
