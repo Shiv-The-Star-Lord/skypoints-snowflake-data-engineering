@@ -38,6 +38,28 @@
     "Flight Date",
     "FlightDate"
   ],
+  "agent_name": [
+    "Agent_Name",
+    "Agent Name"
+  ],
+  "state_code": [
+    "State",
+    "State_Code",
+    "State Code"
+  ],
+  "postal_code": [
+    "Post_Code",
+    "Post Code",
+    "Postal_Code",
+    "Postal Code",
+    "ZIP"
+  ],
+  "is_active": [
+    "Is_Active",
+    "Is Active",
+    "Active Member",
+    "Active"
+  ],
   "member_type": [
     "Member_Type",
     "Member Type",

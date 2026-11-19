@@ -1,0 +1,6 @@
+
+Member_Name,Member_Id,Enrollment_Date,Last_Flight_Date,Tier_Code,Agent_Name,State,Country,DOB,Is_Active
+Rahul Sharma,IND1001,2022-01-15,2026-08-10,GOLD,Amit,DL,IND,1995-05-20,Y
+Priya Verma,IND1002,2021-06-20,2025-11-01,SILVER,Neha,MH,IND,1990-09-12,Y
+Amit Kumar,IND1003,2020-03-10,,BRONZE,Ravi,KA,IND,1988-12-05,N
+Sneha Gupta,IND1004,2023-07-25,2026-10-15,GOLD,Pooja,UP,IND,1998-02-18,Y
