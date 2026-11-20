@@ -5,7 +5,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from python.ingestion.ingestion_pipeline import run_member_ingestion
+from python.ingestion.ingestion_pipeline import (
+    run_member_ingestion,
+    validate_before_loading
+)
 
 
 CSV_FILE = PROJECT_ROOT / "data/sample/IND.csv"
@@ -52,5 +55,38 @@ def test_member_ingestion_pipeline():
     print("\nAll ingestion pipeline tests passed!")
 
 
+def test_validate_before_loading_rejects_invalid_data():
+
+    invalid_result = {
+        "is_valid": False,
+        "errors": [
+            {
+                "message": "Duplicate member IDs found"
+            },
+            {
+                "message": "Invalid enrollment date"
+            }
+        ],
+        "data": None
+    }
+
+    try:
+        validate_before_loading(invalid_result)
+
+    except ValueError as error:
+
+        assert "Loading aborted" in str(error)
+
+        print("Invalid data rejection test passed!")
+
+    else:
+        raise AssertionError(
+            "Invalid data was not rejected."
+        )
+
+
 if __name__ == "__main__":
+
     test_member_ingestion_pipeline()
+
+    test_validate_before_loading_rejects_invalid_data()

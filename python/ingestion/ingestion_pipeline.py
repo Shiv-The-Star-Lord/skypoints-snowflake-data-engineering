@@ -4,7 +4,10 @@ from pathlib import Path
 import pandas as pd
 
 from python.ingestion.file_reader import read_file
-from python.ingestion.header_mapper import (standardize_headers,reorder_standard_columns)
+from python.ingestion.header_mapper import (
+    standardize_headers,
+    reorder_standard_columns
+)
 from python.ingestion.data_validator import validate_member_data
 
 
@@ -15,8 +18,9 @@ def run_member_ingestion(file_path, mapping_path, file_format=None):
     Steps:
         1. Read source file.
         2. Standardize column names.
-        3. Validate member records.
-        4. Return processed data and validation results.
+        3. Reorder standardized columns.
+        4. Validate member records.
+        5. Return processed data and validation results.
     """
 
     file_path = Path(file_path)
@@ -42,16 +46,18 @@ def run_member_ingestion(file_path, mapping_path, file_format=None):
         df,
         mapping_path
     )
+
+    # Step 3: Reorder standardized columns
     standardized_df = reorder_standard_columns(standardized_df)
-    
+
     print("Header standardization completed.")
 
-    # Step 3: Validate member records
+    # Step 4: Validate member records
     print("\nValidating member records...")
 
     validation_result = validate_member_data(standardized_df)
 
-    # Step 4: Prepare ingestion result
+    # Step 5: Prepare ingestion result
     result = {
         "source_file": file_path.name,
         "total_records": len(standardized_df),
@@ -70,3 +76,32 @@ def run_member_ingestion(file_path, mapping_path, file_format=None):
     print(f"Missing standard columns: {missing_columns}")
 
     return result
+
+
+def validate_before_loading(ingestion_result):
+    """
+    Prevent invalid member data from being loaded into Snowflake.
+
+    Returns the validated DataFrame if validation succeeds.
+    Raises ValueError if validation fails.
+    """
+
+    if not ingestion_result["is_valid"]:
+
+        error_messages = [
+            error["message"]
+            for error in ingestion_result["errors"]
+        ]
+
+        raise ValueError(
+            "Member data validation failed. "
+            "Loading aborted.\n"
+            + "\n".join(error_messages)
+        )
+
+    print(
+        "Data validation successful. "
+        "Ready for Snowflake loading."
+    )
+
+    return ingestion_result["data"]
