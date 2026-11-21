@@ -1,6 +1,11 @@
 
 import json
 from pathlib import Path
+
+from python.transformations.member_processor import (
+    run_member_processing
+)
+
 from python.transformations.redemption_processor import (
     run_redemption_processing
 )
@@ -38,8 +43,9 @@ def run_member_source(source_config, file_path=None):
     Execute one configured member source.
 
     1. Read and validate source file.
-    2. Connect to Snowflake.
-    3. Load records into RAW with audit tracking.
+    2. Load records into RAW with audit tracking.
+    3. Transform RAW into STG.
+    4. Process STG into CORE using SCD Type 2.
     """
 
     source_file = (
@@ -57,6 +63,7 @@ def run_member_source(source_config, file_path=None):
     print("Source ID:", source_config["source_id"])
     print("Source file:", source_file.name)
 
+    # Step 1: Read and validate member source.
     ingestion_result = run_member_ingestion(
         file_path=source_file,
         mapping_path=MAPPING_PATH,
@@ -65,6 +72,7 @@ def run_member_source(source_config, file_path=None):
 
     validated_df = validate_before_loading(ingestion_result)
 
+    # Step 2: Load validated records into RAW.
     connection = None
 
     try:
@@ -78,12 +86,21 @@ def run_member_source(source_config, file_path=None):
             entity_type=source_config["entity"]
         )
 
-        return load_result
-
     finally:
         if connection:
             connection.close()
 
+    print("\nRAW ingestion result:", load_result)
+
+    # Step 3 and 4: Process RAW -> STG -> CORE.
+    # Run even when RAW ingestion was skipped as a duplicate.
+    processing_result = run_member_processing()
+
+    return {
+        "raw_load": load_result,
+        "transformation": processing_result,
+        "status": "SUCCESS"
+    }
 
 
 def run_redemption_source(source_config, file_path=None):
@@ -112,6 +129,7 @@ def run_redemption_source(source_config, file_path=None):
     print("Source ID:", source_config["source_id"])
     print("Source file:", source_file.name)
 
+    # Step 1: Read and validate JSON.
     data = read_file(
         source_file,
         source_config["format"]
@@ -125,6 +143,7 @@ def run_redemption_source(source_config, file_path=None):
             + "; ".join(validation_result["errors"])
         )
 
+    # Step 2: Load into RAW.
     connection = None
 
     try:
@@ -144,7 +163,8 @@ def run_redemption_source(source_config, file_path=None):
 
     print("\nRAW ingestion result:", load_result)
 
-    # Run transformations even when RAW ingestion was skipped as a duplicate.
+    # Step 3 and 4: Process RAW -> STG -> CORE.
+    # Run even when RAW ingestion was skipped as a duplicate.
     processing_result = run_redemption_processing()
 
     return {

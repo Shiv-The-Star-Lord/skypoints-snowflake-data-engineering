@@ -4,10 +4,12 @@
 -- LAYER: STAGING (STG)
 -- PURPOSE:
 --   1. Create the STG member profile table.
---   2. Generate a hash for each member profile.
---   3. Identify duplicate and changed profile versions.
---   4. Preserve distinct profile versions for CORE SCD Type 2.
---   5. Prevent previously processed RAW records from loading again.
+--   2. Derive AGE from DATE_OF_BIRTH.
+--   3. Derive STALE_MEMBER using LAST_FLIGHT_DATE.
+--   4. Generate a hash for each member profile.
+--   5. Identify duplicate and changed profile versions.
+--   6. Preserve distinct profile versions for CORE SCD Type 2.
+--   7. Prevent previously processed RAW records from loading again.
 -- ============================================================
 
 
@@ -20,9 +22,11 @@ CREATE TABLE IF NOT EXISTS SKYPOINTS_DE.STG.STG_MEMBER_PROFILES
     MEMBER_NAME          VARCHAR(255),
     MEMBER_ID            VARCHAR(100),
     DATE_OF_BIRTH        DATE,
+    AGE                  NUMBER(3,0),
     TIER_CODE            VARCHAR(50),
     ENROLLMENT_DATE      DATE,
     LAST_FLIGHT_DATE     DATE,
+    STALE_MEMBER         BOOLEAN,
     AGENT_NAME           VARCHAR(255),
     STATE_CODE           VARCHAR(100),
     POSTAL_CODE          VARCHAR(50),
@@ -50,9 +54,11 @@ INSERT INTO SKYPOINTS_DE.STG.STG_MEMBER_PROFILES
     MEMBER_NAME,
     MEMBER_ID,
     DATE_OF_BIRTH,
+    AGE,
     TIER_CODE,
     ENROLLMENT_DATE,
     LAST_FLIGHT_DATE,
+    STALE_MEMBER,
     AGENT_NAME,
     STATE_CODE,
     POSTAL_CODE,
@@ -122,9 +128,36 @@ SELECT
     R.MEMBER_NAME,
     R.MEMBER_ID,
     R.DATE_OF_BIRTH,
+
+    -- Calculate completed age in years.
+    CASE
+        WHEN R.DATE_OF_BIRTH IS NOT NULL
+        THEN
+            DATEDIFF(YEAR, R.DATE_OF_BIRTH, CURRENT_DATE())
+            - CASE
+                WHEN DATEADD(
+                    YEAR,
+                    DATEDIFF(YEAR, R.DATE_OF_BIRTH, CURRENT_DATE()),
+                    R.DATE_OF_BIRTH
+                ) > CURRENT_DATE()
+                THEN 1
+                ELSE 0
+              END
+        ELSE NULL
+    END AS AGE,
+
     R.TIER_CODE,
     R.ENROLLMENT_DATE,
     R.LAST_FLIGHT_DATE,
+
+    -- Member is stale if last flight was more than 90 days ago.
+    CASE
+        WHEN R.LAST_FLIGHT_DATE IS NULL THEN NULL
+        WHEN DATEDIFF(DAY, R.LAST_FLIGHT_DATE, CURRENT_DATE()) > 90
+            THEN TRUE
+        ELSE FALSE
+    END AS STALE_MEMBER,
+
     R.AGENT_NAME,
     R.STATE_CODE,
     R.POSTAL_CODE,
@@ -157,6 +190,10 @@ WHERE NOT EXISTS
 SELECT
     MEMBER_NAME,
     MEMBER_ID,
+    DATE_OF_BIRTH,
+    AGE,
+    LAST_FLIGHT_DATE,
+    STALE_MEMBER,
     COUNTRY_CODE,
     RECORD_HASH,
     INGESTION_TIMESTAMP,
