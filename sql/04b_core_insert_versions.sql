@@ -1,0 +1,70 @@
+-- ============================================================
+-- PROJECT: SKYPOINTS
+-- LAYER: CORE
+-- PURPOSE: Insert new SCD Type 2 profile versions
+-- ============================================================
+
+INSERT INTO SKYPOINTS_DE.CORE.MEMBER_PROFILE
+(
+    MEMBER_NAME,
+    MEMBER_ID,
+    DATE_OF_BIRTH,
+    TIER_CODE,
+    ENROLLMENT_DATE,
+    LAST_FLIGHT_DATE,
+    AGENT_NAME,
+    STATE_CODE,
+    POSTAL_CODE,
+    IS_ACTIVE,
+    MEMBER_TYPE,
+    COUNTRY_CODE,
+    RECORD_HASH,
+    EFFECTIVE_FROM,
+    EFFECTIVE_TO,
+    IS_CURRENT,
+    SOURCE_BATCH_ID,
+    SOURCE_ROW_NUMBER
+)
+SELECT
+    P.MEMBER_NAME,
+    P.MEMBER_ID,
+    P.DATE_OF_BIRTH,
+    P.TIER_CODE,
+    P.ENROLLMENT_DATE,
+    P.LAST_FLIGHT_DATE,
+    P.AGENT_NAME,
+    P.STATE_CODE,
+    P.POSTAL_CODE,
+    P.IS_ACTIVE,
+    P.MEMBER_TYPE,
+    P.COUNTRY_CODE,
+    P.RECORD_HASH,
+    P.INGESTION_TIMESTAMP,
+    P.NEXT_EFFECTIVE_FROM,
+    CASE
+        WHEN P.NEXT_EFFECTIVE_FROM IS NULL THEN TRUE
+        ELSE FALSE
+    END,
+    P.BATCH_ID,
+    P.SOURCE_ROW_NUMBER
+FROM
+(
+    SELECT
+        S.*,
+        LEAD(S.INGESTION_TIMESTAMP) OVER
+        (
+            PARTITION BY S.MEMBER_NAME
+            ORDER BY
+                S.INGESTION_TIMESTAMP,
+                S.BATCH_ID,
+                S.SOURCE_ROW_NUMBER
+        ) AS NEXT_EFFECTIVE_FROM
+    FROM SKYPOINTS_DE.STG.STG_MEMBER_PROFILES S
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM SKYPOINTS_DE.CORE.MEMBER_PROFILE C
+        WHERE C.SOURCE_BATCH_ID = S.BATCH_ID
+          AND C.SOURCE_ROW_NUMBER = S.SOURCE_ROW_NUMBER
+    )
+) P;
