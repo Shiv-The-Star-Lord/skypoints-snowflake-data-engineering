@@ -1,15 +1,22 @@
 
 import json
 from pathlib import Path
+from python.transformations.redemption_processor import (
+    run_redemption_processing
+)
 
 from python.ingestion.ingestion_pipeline import (
     run_member_ingestion,
     validate_before_loading
 )
 
+from python.ingestion.file_reader import read_file
+from python.ingestion.data_validator import validate_redemption_data
+
 from python.snowflake_loader import (
     get_snowflake_connection,
-    load_member_data
+    load_member_data,
+    load_redemption_data
 )
 
 
@@ -28,13 +35,11 @@ def load_source_config():
 
 def run_member_source(source_config, file_path=None):
     """
-    Execute one configured member source:
+    Execute one configured member source.
 
     1. Read and validate source file.
     2. Connect to Snowflake.
     3. Load records into RAW with audit tracking.
-
-    An optional file_path allows testing with a separate file.
     """
 
     source_file = (
@@ -80,8 +85,77 @@ def run_member_source(source_config, file_path=None):
             connection.close()
 
 
+
+def run_redemption_source(source_config, file_path=None):
+    """
+    Execute one configured redemption JSON source.
+
+    1. Read nested JSON.
+    2. Validate redemption data.
+    3. Load into RAW_REDEMPTIONS with audit tracking.
+    4. Merge RAW into STG.
+    5. Merge STG into CORE.
+    """
+
+    source_file = (
+        Path(file_path)
+        if file_path
+        else PROJECT_ROOT / "data" / "raw" / source_config["file_name"]
+    )
+
+    if not source_file.exists():
+        raise FileNotFoundError(
+            f"Redemption source file not found: {source_file}"
+        )
+
+    print("\nStarting redemption ingestion")
+    print("Source ID:", source_config["source_id"])
+    print("Source file:", source_file.name)
+
+    data = read_file(
+        source_file,
+        source_config["format"]
+    )
+
+    validation_result = validate_redemption_data(data)
+
+    if not validation_result["is_valid"]:
+        raise ValueError(
+            "Redemption data validation failed: "
+            + "; ".join(validation_result["errors"])
+        )
+
+    connection = None
+
+    try:
+        connection = get_snowflake_connection()
+
+        load_result = load_redemption_data(
+            connection=connection,
+            data=data,
+            file_path=source_file,
+            source_id=source_config["source_id"],
+            entity_type=source_config["entity"]
+        )
+
+    finally:
+        if connection:
+            connection.close()
+
+    print("\nRAW ingestion result:", load_result)
+
+    # Run transformations even when RAW ingestion was skipped as a duplicate.
+    processing_result = run_redemption_processing()
+
+    return {
+        "raw_load": load_result,
+        "transformation": processing_result,
+        "status": "SUCCESS"
+    }
+
+
 def run_all_member_sources():
-    """Run all enabled member profile sources."""
+    """Run all enabled member and redemption sources."""
 
     config = load_source_config()
 
@@ -90,10 +164,11 @@ def run_all_member_sources():
         if not source.get("enabled", False):
             continue
 
-        if source["entity"] != "MEMBER_PROFILE":
-            continue
+        if source["entity"] == "MEMBER_PROFILE":
+            run_member_source(source)
 
-        run_member_source(source)
+        elif source["entity"] == "REDEMPTION":
+            run_redemption_source(source)
 
 
 if __name__ == "__main__":

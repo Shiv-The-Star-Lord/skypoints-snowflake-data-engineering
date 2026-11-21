@@ -1,0 +1,79 @@
+
+MERGE INTO STG_REDEMPTION_TRANSACTIONS AS target
+
+USING (
+    SELECT
+        r.MEMBER_ID,
+        r.FEED_DATE,
+        f.VALUE:txn_id::VARCHAR AS TXN_ID,
+        TO_DATE(f.VALUE:txn_date::VARCHAR, 'YYYYMMDD') AS TXN_DATE,
+        f.VALUE:partner::VARCHAR AS PARTNER,
+        f.VALUE:miles_redeemed::NUMBER(18,2) AS MILES_REDEEMED,
+        f.VALUE:status::VARCHAR AS STATUS,
+        f.INDEX AS TRANSACTION_INDEX,
+        r.SOURCE_FILE,
+        r.INGESTION_TIMESTAMP,
+        r.BATCH_ID
+
+    FROM SKYPOINTS_DE.RAW.RAW_REDEMPTIONS r,
+    LATERAL FLATTEN(INPUT => r.REDEMPTION_DATA) f
+
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY
+            r.MEMBER_ID,
+            f.VALUE:txn_id::VARCHAR
+        ORDER BY
+            r.INGESTION_TIMESTAMP DESC,
+            r.BATCH_ID DESC
+    ) = 1
+
+) AS source
+
+ON target.MEMBER_ID = source.MEMBER_ID
+AND target.TXN_ID = source.TXN_ID
+
+WHEN MATCHED AND (
+       target.FEED_DATE IS DISTINCT FROM source.FEED_DATE
+    OR target.TXN_DATE IS DISTINCT FROM source.TXN_DATE
+    OR target.PARTNER IS DISTINCT FROM source.PARTNER
+    OR target.MILES_REDEEMED IS DISTINCT FROM source.MILES_REDEEMED
+    OR target.STATUS IS DISTINCT FROM source.STATUS
+    OR target.TRANSACTION_INDEX IS DISTINCT FROM source.TRANSACTION_INDEX
+)
+THEN UPDATE SET
+    target.FEED_DATE = source.FEED_DATE,
+    target.TXN_DATE = source.TXN_DATE,
+    target.PARTNER = source.PARTNER,
+    target.MILES_REDEEMED = source.MILES_REDEEMED,
+    target.STATUS = source.STATUS,
+    target.TRANSACTION_INDEX = source.TRANSACTION_INDEX,
+    target.SOURCE_FILE = source.SOURCE_FILE,
+    target.INGESTION_TIMESTAMP = source.INGESTION_TIMESTAMP,
+    target.BATCH_ID = source.BATCH_ID
+
+WHEN NOT MATCHED THEN INSERT (
+    MEMBER_ID,
+    FEED_DATE,
+    TXN_ID,
+    TXN_DATE,
+    PARTNER,
+    MILES_REDEEMED,
+    STATUS,
+    TRANSACTION_INDEX,
+    SOURCE_FILE,
+    INGESTION_TIMESTAMP,
+    BATCH_ID
+)
+VALUES (
+    source.MEMBER_ID,
+    source.FEED_DATE,
+    source.TXN_ID,
+    source.TXN_DATE,
+    source.PARTNER,
+    source.MILES_REDEEMED,
+    source.STATUS,
+    source.TRANSACTION_INDEX,
+    source.SOURCE_FILE,
+    source.INGESTION_TIMESTAMP,
+    source.BATCH_ID
+);

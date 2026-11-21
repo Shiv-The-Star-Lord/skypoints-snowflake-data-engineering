@@ -1,6 +1,7 @@
 
 import os
 import uuid
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -419,6 +420,184 @@ def load_member_data(
 
     finally:
 
+        cursor.close()
+
+
+
+# --------------------------------------------------
+# 6. LOAD REDEMPTION DATA INTO RAW
+# --------------------------------------------------
+
+def load_redemption_data(
+    connection,
+    data,
+    file_path,
+    source_id,
+    entity_type="REDEMPTION"
+):
+    """
+    Load nested redemption JSON into RAW_REDEMPTIONS
+    with duplicate-file detection and audit tracking.
+    """
+
+    file_path = Path(file_path)
+
+    source_file = file_path.name
+    checksum = calculate_file_checksum(file_path)
+    file_size = get_file_size(file_path)
+
+    batch_id = str(uuid.uuid4())
+
+    cursor = connection.cursor()
+
+    try:
+
+        # STEP 1: CHECK DUPLICATE FILE
+
+        already_processed = is_file_already_processed(
+            cursor,
+            source_id,
+            checksum
+        )
+
+        if already_processed:
+
+            create_audit_record(
+                cursor,
+                batch_id,
+                source_id,
+                source_file,
+                checksum,
+                entity_type,
+                file_size,
+                1,
+                "SKIPPED_DUPLICATE"
+            )
+
+            update_audit_status(
+                cursor,
+                batch_id,
+                "SKIPPED_DUPLICATE"
+            )
+
+            connection.commit()
+
+            return {
+                "batch_id": batch_id,
+                "status": "SKIPPED_DUPLICATE",
+                "records_loaded": 0
+            }
+
+        # STEP 2: CREATE STARTED AUDIT RECORD
+
+        create_audit_record(
+            cursor,
+            batch_id,
+            source_id,
+            source_file,
+            checksum,
+            entity_type,
+            file_size,
+            1,
+            "STARTED"
+        )
+
+        connection.commit()
+
+        # STEP 3: PREPARE REDEMPTION RECORD
+
+        member_id = str(data["member_id"])
+
+        feed_date = pd.to_datetime(
+            str(data["feed_date"]),
+            format="%Y%m%d"
+        ).date()
+
+        redemption_data = json.dumps(
+            data["redemptions"]
+        )
+
+        # STEP 4: INSERT INTO RAW
+
+        sql = """
+            INSERT INTO SKYPOINTS_DE.RAW.RAW_REDEMPTIONS (
+                MEMBER_ID,
+                FEED_DATE,
+                REDEMPTION_DATA,
+                SOURCE_FILE,
+                BATCH_ID
+            )
+            SELECT
+                %s,
+                %s,
+                PARSE_JSON(%s),
+                %s,
+                %s
+        """
+
+        cursor.execute(
+            sql,
+            (
+                member_id,
+                feed_date,
+                redemption_data,
+                source_file,
+                batch_id
+            )
+        )
+
+        # STEP 5: MARK AUDIT SUCCESS
+
+        update_audit_status(
+            cursor,
+            batch_id,
+            "SUCCESS"
+        )
+
+        connection.commit()
+
+        print("\nRedemption data loaded successfully!")
+        print("Source file:", source_file)
+        print("Member ID:", member_id)
+        print("Transactions:", len(data["redemptions"]))
+        print("Batch ID:", batch_id)
+        print("Status: SUCCESS")
+
+        return {
+            "batch_id": batch_id,
+            "status": "SUCCESS",
+            "records_loaded": 1
+        }
+
+    except Exception as error:
+
+        connection.rollback()
+
+        try:
+            update_audit_status(
+                cursor,
+                batch_id,
+                "FAILED",
+                str(error)
+            )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+
+            print(
+                "WARNING: Failed to update audit status. "
+                "Check Snowflake batch state:",
+                batch_id
+            )
+
+        print("\nRedemption data loading failed!")
+        print("Error:", error)
+
+        raise
+
+    finally:
         cursor.close()
 
 
