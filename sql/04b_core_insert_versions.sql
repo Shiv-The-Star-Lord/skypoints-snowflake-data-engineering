@@ -2,7 +2,7 @@
 -- ============================================================
 -- PROJECT: SKYPOINTS
 -- LAYER: CORE
--- PURPOSE: Insert new SCD Type 2 profile versions
+-- PURPOSE: Insert new SCD Type 2 versions for pending batches
 -- ============================================================
 
 INSERT INTO SKYPOINTS_DE.CORE.MEMBER_PROFILE
@@ -28,6 +28,7 @@ INSERT INTO SKYPOINTS_DE.CORE.MEMBER_PROFILE
     SOURCE_BATCH_ID,
     SOURCE_ROW_NUMBER
 )
+
 SELECT
     P.MEMBER_NAME,
     P.MEMBER_ID,
@@ -46,16 +47,20 @@ SELECT
     P.RECORD_HASH,
     P.INGESTION_TIMESTAMP,
     P.NEXT_EFFECTIVE_FROM,
+
     CASE
         WHEN P.NEXT_EFFECTIVE_FROM IS NULL THEN TRUE
         ELSE FALSE
     END,
+
     P.BATCH_ID,
     P.SOURCE_ROW_NUMBER
+
 FROM
 (
     SELECT
         S.*,
+
         LEAD(S.INGESTION_TIMESTAMP) OVER
         (
             PARTITION BY S.MEMBER_NAME
@@ -64,12 +69,21 @@ FROM
                 S.BATCH_ID,
                 S.SOURCE_ROW_NUMBER
         ) AS NEXT_EFFECTIVE_FROM
+
     FROM SKYPOINTS_DE.STG.STG_MEMBER_PROFILES S
-    WHERE NOT EXISTS
-    (
-        SELECT 1
-        FROM SKYPOINTS_DE.CORE.MEMBER_PROFILE C
-        WHERE C.SOURCE_BATCH_ID = S.BATCH_ID
-          AND C.SOURCE_ROW_NUMBER = S.SOURCE_ROW_NUMBER
-    )
+
+    INNER JOIN SKYPOINTS_DE.OPS.MEMBER_BATCH_CONTROL B
+        ON S.BATCH_ID = B.BATCH_ID
+
+    WHERE B.STG_STATUS = 'SUCCESS'
+      AND B.CORE_STATUS IN ('PENDING', 'FAILED')
+
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM SKYPOINTS_DE.CORE.MEMBER_PROFILE C
+          WHERE C.SOURCE_BATCH_ID = S.BATCH_ID
+            AND C.SOURCE_ROW_NUMBER = S.SOURCE_ROW_NUMBER
+      )
+
 ) P;
