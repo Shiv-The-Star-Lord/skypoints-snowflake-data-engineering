@@ -1,3 +1,4 @@
+
 -- ============================================================
 -- PROJECT: SKYPOINTS
 -- LAYER: CORE
@@ -9,9 +10,11 @@ INSERT INTO SKYPOINTS_DE.CORE.MEMBER_PROFILE
     MEMBER_NAME,
     MEMBER_ID,
     DATE_OF_BIRTH,
+    AGE,
     TIER_CODE,
     ENROLLMENT_DATE,
     LAST_FLIGHT_DATE,
+    STALE_MEMBER,
     AGENT_NAME,
     STATE_CODE,
     POSTAL_CODE,
@@ -29,9 +32,11 @@ SELECT
     P.MEMBER_NAME,
     P.MEMBER_ID,
     P.DATE_OF_BIRTH,
+    P.AGE,
     P.TIER_CODE,
     P.ENROLLMENT_DATE,
     P.LAST_FLIGHT_DATE,
+    P.STALE_MEMBER,
     P.AGENT_NAME,
     P.STATE_CODE,
     P.POSTAL_CODE,

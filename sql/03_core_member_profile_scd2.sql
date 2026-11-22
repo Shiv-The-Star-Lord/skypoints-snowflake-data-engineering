@@ -1,11 +1,20 @@
+
+-- ============================================================
+-- PROJECT: SKYPOINTS
+-- LAYER: CORE
+-- PURPOSE: Initial SCD Type 2 member profile load
+-- ============================================================
+
 INSERT INTO SKYPOINTS_DE.CORE.MEMBER_PROFILE
 (
     MEMBER_NAME,
     MEMBER_ID,
     DATE_OF_BIRTH,
+    AGE,
     TIER_CODE,
     ENROLLMENT_DATE,
     LAST_FLIGHT_DATE,
+    STALE_MEMBER,
     AGENT_NAME,
     STATE_CODE,
     POSTAL_CODE,
@@ -23,9 +32,11 @@ WITH VERSIONED_DATA AS
         MEMBER_NAME,
         MEMBER_ID,
         DATE_OF_BIRTH,
+        AGE,
         TIER_CODE,
         ENROLLMENT_DATE,
         LAST_FLIGHT_DATE,
+        STALE_MEMBER,
         AGENT_NAME,
         STATE_CODE,
         POSTAL_CODE,
@@ -47,9 +58,11 @@ SELECT
     MEMBER_NAME,
     MEMBER_ID,
     DATE_OF_BIRTH,
+    AGE,
     TIER_CODE,
     ENROLLMENT_DATE,
     LAST_FLIGHT_DATE,
+    STALE_MEMBER,
     AGENT_NAME,
     STATE_CODE,
     POSTAL_CODE,

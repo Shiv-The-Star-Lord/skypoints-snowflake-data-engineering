@@ -112,6 +112,34 @@ def test_member_processing_rollback():
     print("\nMember processing rollback test passed!")
 
 
+def test_core_sql_maps_derived_member_attributes():
+
+    project_root = Path(__file__).resolve().parents[1]
+
+    incremental_sql = read_sql_file(INSERT_CORE_SQL_PATH)
+
+    initial_sql = read_sql_file(
+        project_root / "sql" / "03_core_member_profile_scd2.sql"
+    )
+
+    for sql in [incremental_sql, initial_sql]:
+
+        normalized_sql = sql.upper()
+
+        assert "AGE" in normalized_sql
+        assert "STALE_MEMBER" in normalized_sql
+
+    # Verify incremental mapping from STG to CORE.
+    assert "P.AGE" in incremental_sql.upper()
+    assert "P.STALE_MEMBER" in incremental_sql.upper()
+
+    # Verify initial-load mapping from STG to CORE.
+    assert "        AGE," in initial_sql
+    assert "        STALE_MEMBER," in initial_sql
+
+    print("\nCORE derived attribute mapping test passed!")
+
+
 if __name__ == "__main__":
     test_member_processing_success()
     test_member_processing_rollback()
