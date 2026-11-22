@@ -1,0 +1,272 @@
+USE DATABASE SKYPOINTS_DE;
+
+-- =====================================================
+-- 1. DUPLICATE CURRENT MEMBER CHECK
+-- Expected result: 0 rows
+-- =====================================================
+
+SELECT
+    MEMBER_NAME,
+    COUNT(*) AS CURRENT_RECORD_COUNT
+FROM CORE.MEMBER_PROFILE
+WHERE IS_CURRENT = TRUE
+GROUP BY MEMBER_NAME
+HAVING COUNT(*) > 1;
+
+
+-- =====================================================
+-- 2. MISSING CURRENT MEMBER NAME CHECK
+-- Expected result: 0 rows
+-- =====================================================
+
+SELECT
+    COUNT(*) AS INVALID_CURRENT_MEMBERS
+FROM CORE.MEMBER_PROFILE
+WHERE IS_CURRENT = TRUE
+  AND (
+      MEMBER_NAME IS NULL
+      OR TRIM(MEMBER_NAME) = ''
+  );
+
+
+
+
+
+-- =====================================================
+-- 3. INVALID COUNTRY CODE CHECK
+-- Expected result: 0 rows
+-- =====================================================
+
+SELECT
+    MEMBER_NAME,
+    COUNTRY_CODE
+FROM CORE.MEMBER_PROFILE
+WHERE IS_CURRENT = TRUE
+  AND (
+      COUNTRY_CODE IS NULL
+      OR TRIM(COUNTRY_CODE) = ''
+      OR UPPER(TRIM(COUNTRY_CODE))
+         NOT IN ('IND', 'USA', 'PHIL', 'CAN', 'AU')
+  );
+
+
+-- =====================================================
+-- 4. INVALID AGE CHECK
+-- Expected result: 0 rows
+-- =====================================================
+
+SELECT
+    MEMBER_NAME,
+    DATE_OF_BIRTH,
+    AGE
+FROM CORE.MEMBER_PROFILE
+WHERE IS_CURRENT = TRUE
+  AND (
+      AGE < 0
+      OR AGE > 120
+      OR (DATE_OF_BIRTH IS NOT NULL AND AGE IS NULL)
+  );
+
+
+
+
+-- =====================================================
+-- 5. INVALID SCD TYPE 2 DATE RANGE CHECK
+-- Expected result: 0 rows
+-- =====================================================
+
+SELECT
+    MEMBER_NAME,
+    EFFECTIVE_FROM,
+    EFFECTIVE_TO,
+    IS_CURRENT
+FROM CORE.MEMBER_PROFILE
+WHERE EFFECTIVE_FROM IS NULL
+   OR (IS_CURRENT = TRUE AND EFFECTIVE_TO IS NOT NULL)
+   OR (IS_CURRENT = FALSE AND EFFECTIVE_TO IS NULL)
+   OR (EFFECTIVE_TO IS NOT NULL AND EFFECTIVE_TO <= EFFECTIVE_FROM);
+
+
+-- =====================================================
+-- 6. OVERLAPPING SCD TYPE 2 VERSIONS CHECK
+-- Expected result: 0 rows
+-- =====================================================
+
+SELECT
+    A.MEMBER_NAME,
+    A.MEMBER_SK_KEY AS VERSION_1,
+    B.MEMBER_SK_KEY AS VERSION_2,
+    A.EFFECTIVE_FROM AS VERSION_1_START,
+    A.EFFECTIVE_TO AS VERSION_1_END,
+    B.EFFECTIVE_FROM AS VERSION_2_START,
+    B.EFFECTIVE_TO AS VERSION_2_END
+FROM CORE.MEMBER_PROFILE A
+JOIN CORE.MEMBER_PROFILE B
+    ON A.MEMBER_NAME = B.MEMBER_NAME
+   AND A.MEMBER_SK_KEY < B.MEMBER_SK_KEY
+WHERE A.EFFECTIVE_FROM < COALESCE(
+          B.EFFECTIVE_TO,
+          '9999-12-31'::TIMESTAMP_NTZ
+      )
+  AND B.EFFECTIVE_FROM < COALESCE(
+          A.EFFECTIVE_TO,
+          '9999-12-31'::TIMESTAMP_NTZ
+      );
+
+
+
+
+-- =====================================================
+-- 7. DUPLICATE REDEMPTION TRANSACTION CHECK
+-- Business key: MEMBER_ID + TXN_ID
+-- Expected result: 0 rows
+-- =====================================================
+
+SELECT
+    MEMBER_ID,
+    TXN_ID,
+    COUNT(*) AS TRANSACTION_COUNT
+FROM CORE.REDEMPTION_TRANSACTIONS
+GROUP BY MEMBER_ID, TXN_ID
+HAVING COUNT(*) > 1;
+
+
+-- =====================================================
+-- 8. INVALID REDEMPTION TRANSACTION VALUES CHECK
+-- Expected result: 0 rows
+-- =====================================================
+
+SELECT
+    MEMBER_ID,
+    TXN_ID,
+    MILES_REDEEMED,
+    STATUS
+FROM CORE.REDEMPTION_TRANSACTIONS
+WHERE MEMBER_ID IS NULL
+   OR TRIM(MEMBER_ID) = ''
+   OR TXN_ID IS NULL
+   OR TRIM(TXN_ID) = ''
+   OR TXN_DATE IS NULL
+   OR PARTNER IS NULL
+   OR TRIM(PARTNER) = ''
+   OR MILES_REDEEMED IS NULL
+   OR MILES_REDEEMED <= 0
+   OR STATUS IS NULL
+   OR TRIM(STATUS) = '';
+
+
+
+
+-- =====================================================
+-- 9. COUNTRY TABLE ROW COUNT CHECK
+-- Compare current member counts across country tables
+-- =====================================================
+
+SELECT 'IND' AS COUNTRY, COUNT(*) AS ROW_COUNT
+FROM CORE.MEMBER_PROFILE_IND
+WHERE IS_CURRENT = TRUE
+
+UNION ALL
+
+SELECT 'USA', COUNT(*)
+FROM CORE.MEMBER_PROFILE_USA
+WHERE IS_CURRENT = TRUE
+
+UNION ALL
+
+SELECT 'PHIL', COUNT(*)
+FROM CORE.MEMBER_PROFILE_PHIL
+WHERE IS_CURRENT = TRUE
+
+UNION ALL
+
+SELECT 'CAN', COUNT(*)
+FROM CORE.MEMBER_PROFILE_CAN
+WHERE IS_CURRENT = TRUE
+
+UNION ALL
+
+SELECT 'AU', COUNT(*)
+FROM CORE.MEMBER_PROFILE_AU
+WHERE IS_CURRENT = TRUE;
+
+
+
+
+-- =====================================================
+-- 10. INDIA COUNTRY TABLE CONSISTENCY CHECK
+-- Compare IND projection with current CORE records
+-- Expected result: 0 rows
+-- =====================================================
+
+WITH CURRENT_MEMBERS AS (
+    SELECT *
+    FROM CORE.MEMBER_PROFILE
+    WHERE IS_CURRENT = TRUE
+      AND COUNTRY_CODE = 'IND'
+)
+SELECT
+    C.MEMBER_NAME AS CORE_MEMBER,
+    T.MEMBER_NAME AS COUNTRY_TABLE_MEMBER,
+    C.MEMBER_ID AS CORE_MEMBER_ID,
+    T.MEMBER_ID AS COUNTRY_MEMBER_ID,
+    C.MEMBER_SK_KEY AS CORE_SK,
+    T.MEMBER_SK_KEY AS COUNTRY_SK
+FROM CURRENT_MEMBERS C
+FULL OUTER JOIN CORE.MEMBER_PROFILE_IND T
+    ON C.MEMBER_NAME = T.MEMBER_NAME
+WHERE C.MEMBER_NAME IS NULL
+   OR T.MEMBER_NAME IS NULL
+   OR C.MEMBER_ID IS DISTINCT FROM T.MEMBER_ID
+   OR C.MEMBER_SK_KEY IS DISTINCT FROM T.MEMBER_SK_KEY
+   OR C.COUNTRY_CODE IS DISTINCT FROM T.COUNTRY_CODE
+   OR T.IS_CURRENT IS DISTINCT FROM TRUE;
+
+
+
+
+-- =====================================================
+-- 11. USA, PHIL, CAN AND AU COUNTRY TABLE CONSISTENCY
+-- Compare country projections with current CORE records
+-- Expected result: 0 rows
+-- =====================================================
+
+WITH COUNTRY_TABLES AS (
+    SELECT MEMBER_NAME, MEMBER_ID, MEMBER_SK_KEY, COUNTRY_CODE, IS_CURRENT
+    FROM CORE.MEMBER_PROFILE_USA
+
+    UNION ALL
+
+    SELECT MEMBER_NAME, MEMBER_ID, MEMBER_SK_KEY, COUNTRY_CODE, IS_CURRENT
+    FROM CORE.MEMBER_PROFILE_PHIL
+
+    UNION ALL
+
+    SELECT MEMBER_NAME, MEMBER_ID, MEMBER_SK_KEY, COUNTRY_CODE, IS_CURRENT
+    FROM CORE.MEMBER_PROFILE_CAN
+
+    UNION ALL
+
+    SELECT MEMBER_NAME, MEMBER_ID, MEMBER_SK_KEY, COUNTRY_CODE, IS_CURRENT
+    FROM CORE.MEMBER_PROFILE_AU
+),
+CURRENT_MEMBERS AS (
+    SELECT MEMBER_NAME, MEMBER_ID, MEMBER_SK_KEY, COUNTRY_CODE
+    FROM CORE.MEMBER_PROFILE
+    WHERE IS_CURRENT = TRUE
+      AND COUNTRY_CODE IN ('USA', 'PHIL', 'CAN', 'AU')
+)
+SELECT
+    C.MEMBER_NAME AS CORE_MEMBER,
+    T.MEMBER_NAME AS COUNTRY_TABLE_MEMBER,
+    C.COUNTRY_CODE AS CORE_COUNTRY,
+    T.COUNTRY_CODE AS TABLE_COUNTRY
+FROM CURRENT_MEMBERS C
+FULL OUTER JOIN COUNTRY_TABLES T
+    ON C.MEMBER_NAME = T.MEMBER_NAME
+WHERE C.MEMBER_NAME IS NULL
+   OR T.MEMBER_NAME IS NULL
+   OR C.MEMBER_ID IS DISTINCT FROM T.MEMBER_ID
+   OR C.MEMBER_SK_KEY IS DISTINCT FROM T.MEMBER_SK_KEY
+   OR C.COUNTRY_CODE IS DISTINCT FROM T.COUNTRY_CODE
+   OR T.IS_CURRENT IS DISTINCT FROM TRUE;
