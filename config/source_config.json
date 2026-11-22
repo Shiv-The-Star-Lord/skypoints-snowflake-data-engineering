@@ -8,6 +8,7 @@
       "format": "CSV",
       "entity": "MEMBER_PROFILE",
       "target_table": "RAW_MEMBER_PROFILES",
+      "default_country_code": "IND",
       "enabled": true,
       "options": {
         "header": true,
@@ -17,16 +18,14 @@
     },
     {
       "source_id": "USA_MEMBERS",
-      "file_name": "USA.csv",
-      "format": "CSV",
+      "file_name": "USA.xlsx",
+      "format": "XLSX",
       "entity": "MEMBER_PROFILE",
       "target_table": "RAW_MEMBER_PROFILES",
+      "default_country_code": "USA",
+      "date_format": "%m%d%Y",
       "enabled": true,
-      "options": {
-        "header": true,
-        "delimiter": ",",
-        "encoding": "UTF-8"
-      }
+      "options": {}
     },
     {
       "source_id": "AUS_MEMBERS",
@@ -34,6 +33,7 @@
       "format": "XLSX",
       "entity": "MEMBER_PROFILE",
       "target_table": "RAW_MEMBER_PROFILES",
+      "default_country_code": "AU",
       "enabled": true,
       "options": {}
     },
@@ -43,7 +43,7 @@
       "format": "XML",
       "entity": "MEMBER_PROFILE",
       "target_table": "RAW_MEMBER_PROFILES",
-      "enabled": true,
+      "enabled": false,
       "options": {}
     },
     {

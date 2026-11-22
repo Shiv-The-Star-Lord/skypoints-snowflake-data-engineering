@@ -106,10 +106,8 @@ def create_audit_record(
 
 
 def is_file_already_processed(cursor, source_id, checksum):
-    """
-    Check whether identical content from the same source
-    has already completed successfully.
-    """
+    """Check whether identical content from the same source
+    has already completed successfully."""
 
     sql = """
         SELECT COUNT(*)
@@ -205,9 +203,14 @@ def prepare_member_records(df, source_file, batch_id):
 
             values.append(value)
 
+        source_row_number = row.get(
+            "_source_row_number",
+            row_number
+        )
+
         values.extend([
             source_file,
-            row_number,
+            int(source_row_number),
             batch_id
         ])
 
@@ -217,7 +220,143 @@ def prepare_member_records(df, source_file, batch_id):
 
 
 # --------------------------------------------------
-# 5. LOAD MEMBER DATA INTO RAW
+# 5. PREPARE REJECTED MEMBER RECORDS
+# --------------------------------------------------
+
+def prepare_rejected_member_records(
+    rejected_df,
+    source_file,
+    source_id,
+    batch_id
+):
+    """
+    Prepare one quarantine row per validation error.
+    """
+
+    records = []
+
+    for row_number, (_, row) in enumerate(
+        rejected_df.iterrows(),
+        start=1
+    ):
+
+        source_row_number = int(
+            row.get("_source_row_number", row_number)
+        )
+
+        validation_errors = row.get(
+            "validation_errors",
+            []
+        )
+
+        record_data = {}
+
+        for column, value in row.items():
+
+            if column == "validation_errors":
+                continue
+
+            if isinstance(value, pd.Timestamp):
+                value = value.isoformat()
+
+            elif value is None:
+                pass
+
+            elif isinstance(value, (dict, list, tuple)):
+                pass
+
+            else:
+                try:
+                    if pd.isna(value):
+                        value = None
+                except (TypeError, ValueError):
+                    pass
+
+            if hasattr(value, "item"):
+                value = value.item()
+
+            record_data[column] = value
+
+        record_json = json.dumps(
+            record_data,
+            default=str
+        )
+
+        for error in validation_errors:
+
+            records.append((
+                source_id,
+                source_file,
+                source_row_number,
+                batch_id,
+                record_json,
+                error.get("check"),
+                error.get("column"),
+                error.get("message")
+            ))
+
+    return records
+
+
+# --------------------------------------------------
+# 6. INSERT REJECTED RECORDS INTO OPS
+# --------------------------------------------------
+
+def load_rejected_member_records(
+    cursor,
+    rejected_df,
+    source_file,
+    source_id,
+    batch_id
+):
+    """Insert rejected member records into OPS quarantine."""
+
+    if rejected_df is None or rejected_df.empty:
+        return 0
+
+    records = prepare_rejected_member_records(
+        rejected_df,
+        source_file,
+        source_id,
+        batch_id
+    )
+
+    if not records:
+        return 0
+
+    sql = """
+        INSERT INTO SKYPOINTS_DE.OPS.REJECTED_MEMBER_RECORDS (
+            SOURCE_ID,
+            SOURCE_FILE,
+            SOURCE_ROW_NUMBER,
+            BATCH_ID,
+            RECORD_DATA,
+            ERROR_CHECK,
+            ERROR_COLUMN,
+            ERROR_MESSAGE
+        )
+        SELECT
+            %s,
+            %s,
+            %s,
+            %s,
+            PARSE_JSON(%s),
+            %s,
+            %s,
+            %s
+    """
+
+    inserted_count = 0
+
+    for record in records:
+        cursor.execute(sql, record)
+        inserted_count += 1
+
+    return inserted_count
+
+
+# --------------------------------------------------
+# 7. LOAD MEMBER DATA INTO RAW AND QUARANTINE
 # --------------------------------------------------
 
 def load_member_data(
@@ -225,11 +364,12 @@ def load_member_data(
     df,
     file_path,
     source_id,
-    entity_type="MEMBER_PROFILE"
+    entity_type="MEMBER_PROFILE",
+    rejected_df=None
 ):
     """
-    Load member records into RAW and track the attempt
-    in OPS.INGESTION_AUDIT.
+    Load valid records into RAW and rejected records
+    into OPS quarantine using the same batch ID.
     """
 
     file_path = Path(file_path)
@@ -242,11 +382,9 @@ def load_member_data(
 
     cursor = connection.cursor()
 
-    try:
+    rejected_record_count = 0
 
-        # ------------------------------------------
-        # STEP 1: CHECK DUPLICATE FILE
-        # ------------------------------------------
+    try:
 
         print("\nChecking file duplication...")
 
@@ -254,6 +392,11 @@ def load_member_data(
             cursor,
             source_id,
             checksum
+        )
+
+        total_records = len(df) + (
+            len(rejected_df)
+            if rejected_df is not None else 0
         )
 
         if already_processed:
@@ -266,31 +409,25 @@ def load_member_data(
                 checksum,
                 entity_type,
                 file_size,
-                len(df),
-                "SKIPPED_DUPLICATE"
-            )
-
-            update_audit_status(
-                cursor,
-                batch_id,
+                total_records,
                 "SKIPPED_DUPLICATE"
             )
 
             connection.commit()
 
             print("File already processed successfully.")
-            print("Skipping RAW loading.")
+            print("Skipping RAW and quarantine loading.")
             print("Batch ID:", batch_id)
 
             return {
                 "batch_id": batch_id,
                 "status": "SKIPPED_DUPLICATE",
-                "records_loaded": 0
+                "records_loaded": 0,
+                "records_rejected": 0,
+                "quarantine_entries": 0
             }
 
-        # ------------------------------------------
-        # STEP 2: CREATE STARTED AUDIT RECORD
-        # ------------------------------------------
+        # Create STARTED audit record.
 
         create_audit_record(
             cursor,
@@ -300,17 +437,13 @@ def load_member_data(
             checksum,
             entity_type,
             file_size,
-            len(df),
+            total_records,
             "STARTED"
         )
 
-        # Commit STARTED independently so that
-        # a failed RAW transaction does not erase it.
         connection.commit()
 
-        # ------------------------------------------
-        # STEP 3: PREPARE MEMBER RECORDS
-        # ------------------------------------------
+        # Prepare valid records.
 
         records = prepare_member_records(
             df,
@@ -318,9 +451,7 @@ def load_member_data(
             batch_id
         )
 
-        # ------------------------------------------
-        # STEP 4: INSERT INTO RAW
-        # ------------------------------------------
+        # Insert valid records into RAW.
 
         if records:
 
@@ -356,9 +487,17 @@ def load_member_data(
 
             cursor.executemany(sql, records)
 
-        # ------------------------------------------
-        # STEP 5: MARK AUDIT SUCCESS
-        # ------------------------------------------
+        # Insert rejected records into quarantine.
+
+        rejected_record_count = load_rejected_member_records(
+            cursor,
+            rejected_df,
+            source_file,
+            source_id,
+            batch_id
+        )
+
+        # Mark audit SUCCESS.
 
         update_audit_status(
             cursor,
@@ -366,34 +505,38 @@ def load_member_data(
             "SUCCESS"
         )
 
-        # RAW insertion and SUCCESS update
-        # are committed together.
+        # Commit RAW + quarantine + audit SUCCESS.
+
         connection.commit()
 
-        print("\nMember data loaded successfully!")
+        print("\nMember ingestion completed!")
         print("Source file:", source_file)
         print("Source ID:", source_id)
-        print("Records loaded:", len(records))
+        print("Valid records loaded:", len(records))
+        print("Rejected records:", (
+            len(rejected_df)
+            if rejected_df is not None else 0
+        ))
+        print("Quarantine entries:", rejected_record_count)
         print("Batch ID:", batch_id)
         print("Status: SUCCESS")
 
         return {
             "batch_id": batch_id,
             "status": "SUCCESS",
-            "records_loaded": len(records)
+            "records_loaded": len(records),
+            "records_rejected": (
+                len(rejected_df)
+                if rejected_df is not None else 0
+            ),
+            "quarantine_entries": rejected_record_count
         }
 
     except Exception as error:
 
-        # ------------------------------------------
-        # STEP 6: ROLLBACK RAW TRANSACTION
-        # ------------------------------------------
-
         connection.rollback()
 
-        # Record failure separately.
         try:
-
             update_audit_status(
                 cursor,
                 batch_id,
@@ -404,7 +547,6 @@ def load_member_data(
             connection.commit()
 
         except Exception:
-
             connection.rollback()
 
             print(
@@ -419,13 +561,11 @@ def load_member_data(
         raise
 
     finally:
-
         cursor.close()
 
 
-
 # --------------------------------------------------
-# 6. LOAD REDEMPTION DATA INTO RAW
+# 8. LOAD REDEMPTION DATA INTO RAW
 # --------------------------------------------------
 
 def load_redemption_data(
@@ -452,8 +592,6 @@ def load_redemption_data(
 
     try:
 
-        # STEP 1: CHECK DUPLICATE FILE
-
         already_processed = is_file_already_processed(
             cursor,
             source_id,
@@ -474,12 +612,6 @@ def load_redemption_data(
                 "SKIPPED_DUPLICATE"
             )
 
-            update_audit_status(
-                cursor,
-                batch_id,
-                "SKIPPED_DUPLICATE"
-            )
-
             connection.commit()
 
             return {
@@ -487,8 +619,6 @@ def load_redemption_data(
                 "status": "SKIPPED_DUPLICATE",
                 "records_loaded": 0
             }
-
-        # STEP 2: CREATE STARTED AUDIT RECORD
 
         create_audit_record(
             cursor,
@@ -504,8 +634,6 @@ def load_redemption_data(
 
         connection.commit()
 
-        # STEP 3: PREPARE REDEMPTION RECORD
-
         member_id = str(data["member_id"])
 
         feed_date = pd.to_datetime(
@@ -516,8 +644,6 @@ def load_redemption_data(
         redemption_data = json.dumps(
             data["redemptions"]
         )
-
-        # STEP 4: INSERT INTO RAW
 
         sql = """
             INSERT INTO SKYPOINTS_DE.RAW.RAW_REDEMPTIONS (
@@ -545,8 +671,6 @@ def load_redemption_data(
                 batch_id
             )
         )
-
-        # STEP 5: MARK AUDIT SUCCESS
 
         update_audit_status(
             cursor,
@@ -602,7 +726,7 @@ def load_redemption_data(
 
 
 # --------------------------------------------------
-# 6. MAIN EXECUTION
+# 9. MAIN EXECUTION
 # --------------------------------------------------
 
 if __name__ == "__main__":

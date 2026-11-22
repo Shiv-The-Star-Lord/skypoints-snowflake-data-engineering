@@ -11,8 +11,7 @@ from python.transformations.redemption_processor import (
 )
 
 from python.ingestion.ingestion_pipeline import (
-    run_member_ingestion,
-    validate_before_loading
+    run_member_ingestion
 )
 
 from python.ingestion.file_reader import read_file
@@ -42,10 +41,12 @@ def run_member_source(source_config, file_path=None):
     """
     Execute one configured member source.
 
-    1. Read and validate source file.
-    2. Load records into RAW with audit tracking.
-    3. Transform RAW into STG.
-    4. Process STG into CORE using SCD Type 2.
+    1. Read and standardize source file.
+    2. Split valid and rejected records.
+    3. Load valid records into RAW.
+    4. Store rejected records in OPS quarantine.
+    5. Transform RAW into STG.
+    6. Process STG into CORE using SCD Type 2.
     """
 
     source_file = (
@@ -63,16 +64,24 @@ def run_member_source(source_config, file_path=None):
     print("Source ID:", source_config["source_id"])
     print("Source file:", source_file.name)
 
-    # Step 1: Read and validate member source.
+    # Step 1: Read, standardize, and validate source records.
     ingestion_result = run_member_ingestion(
         file_path=source_file,
         mapping_path=MAPPING_PATH,
-        file_format=source_config["format"]
+        file_format=source_config["format"],
+        default_country_code=source_config.get("default_country_code"),
+        date_format=source_config.get("date_format")
     )
 
-    validated_df = validate_before_loading(ingestion_result)
+    valid_df = ingestion_result["valid_data"]
+    rejected_df = ingestion_result["rejected_data"]
 
-    # Step 2: Load validated records into RAW.
+    print("\nMember validation results:")
+    print("Total records:", ingestion_result["total_records"])
+    print("Valid records:", len(valid_df))
+    print("Rejected records:", len(rejected_df))
+
+    # Step 2: Load valid and rejected records.
     connection = None
 
     try:
@@ -80,7 +89,8 @@ def run_member_source(source_config, file_path=None):
 
         load_result = load_member_data(
             connection=connection,
-            df=validated_df,
+            df=valid_df,
+            rejected_df=rejected_df,
             file_path=source_file,
             source_id=source_config["source_id"],
             entity_type=source_config["entity"]
@@ -90,13 +100,19 @@ def run_member_source(source_config, file_path=None):
         if connection:
             connection.close()
 
-    print("\nRAW ingestion result:", load_result)
+    print("\nRAW and quarantine ingestion result:", load_result)
 
     # Step 3 and 4: Process RAW -> STG -> CORE.
-    # Run even when RAW ingestion was skipped as a duplicate.
+    # Run even when RAW loading was skipped as a duplicate
+    # or when all records were rejected.
     processing_result = run_member_processing()
 
     return {
+        "ingestion": {
+            "total_records": ingestion_result["total_records"],
+            "valid_records": len(valid_df),
+            "rejected_records": len(rejected_df)
+        },
         "raw_load": load_result,
         "transformation": processing_result,
         "status": "SUCCESS"
@@ -164,7 +180,6 @@ def run_redemption_source(source_config, file_path=None):
     print("\nRAW ingestion result:", load_result)
 
     # Step 3 and 4: Process RAW -> STG -> CORE.
-    # Run even when RAW ingestion was skipped as a duplicate.
     processing_result = run_redemption_processing()
 
     return {
@@ -182,6 +197,10 @@ def run_all_member_sources():
     for source in config["sources"]:
 
         if not source.get("enabled", False):
+            print(
+                "\nSkipping disabled source:",
+                source.get("source_id")
+            )
             continue
 
         if source["entity"] == "MEMBER_PROFILE":
@@ -189,6 +208,12 @@ def run_all_member_sources():
 
         elif source["entity"] == "REDEMPTION":
             run_redemption_source(source)
+
+        else:
+            print(
+                "\nSkipping unsupported source entity:",
+                source["entity"]
+            )
 
 
 if __name__ == "__main__":

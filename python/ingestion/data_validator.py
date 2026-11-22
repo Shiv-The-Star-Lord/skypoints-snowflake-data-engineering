@@ -2,7 +2,6 @@
 import pandas as pd
 
 
-# Mandatory fields for member profile records
 REQUIRED_COLUMNS = [
     "member_id",
     "member_name",
@@ -10,7 +9,6 @@ REQUIRED_COLUMNS = [
     "country_code"
 ]
 
-# Date columns that need validation
 DATE_COLUMNS = [
     "date_of_birth",
     "enrollment_date",
@@ -18,17 +16,21 @@ DATE_COLUMNS = [
 ]
 
 
-def validate_member_data(df):
+def validate_member_records(df):
     """
-    Validate standardized member profile data.
+    Validate member records individually.
 
     Returns:
-        A dictionary containing validation status and errors.
+        valid_records: DataFrame containing valid records.
+        rejected_records: DataFrame containing invalid records,
+                          including their validation errors.
+        errors: List of validation errors.
     """
 
-    errors = []
+    df = df.copy()
 
-    # Step 1: Check mandatory columns exist
+    # Schema-level validation: processing cannot continue
+    # if mandatory columns are completely absent.
     missing_columns = [
         column
         for column in REQUIRED_COLUMNS
@@ -36,51 +38,46 @@ def validate_member_data(df):
     ]
 
     if missing_columns:
-        errors.append({
-            "check": "MANDATORY_COLUMNS",
-            "message": f"Missing columns: {missing_columns}"
-        })
+        raise ValueError(
+            f"Missing mandatory columns: {missing_columns}"
+        )
 
-        return {
-            "is_valid": False,
-            "errors": errors
-        }
+    row_errors = {
+        index: []
+        for index in df.index
+    }
 
-    # Step 2: Check mandatory fields are not null or blank
+    # 1. Mandatory field validation
     for column in REQUIRED_COLUMNS:
 
-        invalid_rows = df[
+        invalid_mask = (
             df[column].isna() |
             df[column].astype(str).str.strip().eq("")
-        ]
+        )
 
-        if not invalid_rows.empty:
-            errors.append({
+        for index in df.index[invalid_mask]:
+            row_errors[index].append({
                 "check": "MANDATORY_VALUES",
                 "column": column,
-                "row_count": len(invalid_rows),
-                "message": f"{column} contains null or blank values"
+                "message": f"{column} contains a null or blank value"
             })
 
-    # Step 3: Check duplicate member IDs
-    duplicate_rows = df[
-        df["member_id"].duplicated(keep=False)
-    ]
+    # 2. Duplicate member ID validation
+    duplicate_mask = df["member_id"].duplicated(keep=False)
 
-    if not duplicate_rows.empty:
-        errors.append({
+    for index in df.index[duplicate_mask]:
+        row_errors[index].append({
             "check": "DUPLICATE_MEMBER_ID",
-            "row_count": len(duplicate_rows),
-            "message": "Duplicate member IDs found"
+            "column": "member_id",
+            "message": "Duplicate member ID found in source file"
         })
 
-    # Step 4: Check date formats
+    # 3. Date validation
     for column in DATE_COLUMNS:
 
         if column not in df.columns:
             continue
 
-        # Ignore genuinely blank values.
         non_blank = (
             df[column].notna() &
             df[column].astype(str).str.strip().ne("")
@@ -91,46 +88,80 @@ def validate_member_data(df):
             errors="coerce"
         )
 
-        invalid_dates = parsed_dates[parsed_dates.isna()]
+        invalid_indexes = parsed_dates[parsed_dates.isna()].index
 
-        if not invalid_dates.empty:
-            errors.append({
+        for index in invalid_indexes:
+            row_errors[index].append({
                 "check": "INVALID_DATE",
                 "column": column,
-                "row_count": len(invalid_dates),
-                "message": f"{column} contains invalid dates"
+                "message": f"{column} contains an invalid date"
+            })
+
+    # 4. Split valid and rejected records
+    rejected_indexes = [
+        index
+        for index, errors in row_errors.items()
+        if errors
+    ]
+
+    valid_indexes = [
+        index
+        for index, errors in row_errors.items()
+        if not errors
+    ]
+
+    valid_records = df.loc[valid_indexes].copy()
+    rejected_records = df.loc[rejected_indexes].copy()
+
+    rejected_records["validation_errors"] = [
+        row_errors[index]
+        for index in rejected_indexes
+    ]
+
+    # 5. Build error summary
+    errors = []
+
+    for index in rejected_indexes:
+        for error in row_errors[index]:
+            errors.append({
+                "row_index": index,
+                **error
             })
 
     return {
-        "is_valid": len(errors) == 0,
-        "errors": errors
+        "valid_records": valid_records,
+        "rejected_records": rejected_records,
+        "errors": errors,
+        "is_valid": len(rejected_records) == 0
     }
 
 
+def validate_member_data(df):
+    """
+    Backward-compatible validation summary.
+    """
+
+    result = validate_member_records(df)
+
+    return {
+        "is_valid": result["is_valid"],
+        "errors": result["errors"]
+    }
 
 
 def validate_redemption_data(data):
     """
     Validate nested JSON redemption feed data.
-
-    Expected structure:
-    {
-        "member_id": "...",
-        "feed_date": "YYYYMMDD",
-        "redemptions": [...]
-    }
     """
 
     errors = []
 
-    # Step 1: Validate top-level structure
     if not isinstance(data, dict):
         return {
             "is_valid": False,
             "errors": ["Redemption feed must be a JSON object."]
         }
 
-    # Step 2: Validate mandatory top-level fields
     required_fields = [
         "member_id",
         "feed_date",
@@ -150,7 +181,6 @@ def validate_redemption_data(data):
     if not str(data["member_id"]).strip():
         errors.append("member_id cannot be blank.")
 
-    # Step 3: Validate feed date
     try:
         pd.to_datetime(
             str(data["feed_date"]),
@@ -160,7 +190,6 @@ def validate_redemption_data(data):
     except (ValueError, TypeError):
         errors.append("feed_date must use YYYYMMDD format.")
 
-    # Step 4: Validate redemption array
     redemptions = data["redemptions"]
 
     if not isinstance(redemptions, list):
@@ -210,8 +239,10 @@ def validate_redemption_data(data):
             if "miles_redeemed" in transaction:
                 try:
                     miles = float(transaction["miles_redeemed"])
+
                     if miles <= 0:
                         raise ValueError
+
                 except (ValueError, TypeError):
                     errors.append(
                         f"Redemption at index {index}: "
