@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from python.transformations.member_processor import (
     run_member_processing
 )
@@ -15,7 +17,11 @@ from python.ingestion.ingestion_pipeline import (
 )
 
 from python.ingestion.file_reader import read_file
-from python.ingestion.data_validator import validate_redemption_data
+
+from python.ingestion.data_validator import (
+    validate_redemption_data,
+    validate_member_identity_records
+)
 
 from python.snowflake_loader import (
     get_snowflake_connection,
@@ -30,6 +36,10 @@ CONFIG_PATH = PROJECT_ROOT / "config" / "source_config.json"
 MAPPING_PATH = PROJECT_ROOT / "config" / "column_mapping.json"
 
 
+# --------------------------------------------------
+# 1. LOAD SOURCE CONFIGURATION
+# --------------------------------------------------
+
 def load_source_config():
     """Load source definitions from JSON configuration."""
 
@@ -37,16 +47,84 @@ def load_source_config():
         return json.load(file)
 
 
+# --------------------------------------------------
+# 2. GET EXISTING MEMBER IDENTITIES FROM CORE
+# --------------------------------------------------
+
+def get_existing_member_identities(connection, member_names):
+    """
+    Retrieve all historical member IDs from CORE for incoming names.
+
+    All SCD2 history is checked so an earlier identity conflict
+    cannot be hidden by looking only at current records.
+    """
+
+    normalized_names = sorted({
+        str(name).strip().upper()
+        for name in member_names
+        if name is not None
+        and not pd.isna(name)
+        and str(name).strip()
+    })
+
+    if not normalized_names:
+        return {}
+
+    placeholders = ", ".join(
+        ["%s"] * len(normalized_names)
+    )
+
+    sql = f"""
+        SELECT DISTINCT
+            UPPER(TRIM(MEMBER_NAME)) AS MEMBER_NAME,
+            TRIM(TO_VARCHAR(MEMBER_ID)) AS MEMBER_ID
+        FROM SKYPOINTS_DE.CORE.MEMBER_PROFILE
+        WHERE UPPER(TRIM(MEMBER_NAME)) IN ({placeholders})
+    """
+
+    cursor = connection.cursor()
+
+    try:
+        cursor.execute(sql, tuple(normalized_names))
+        rows = cursor.fetchall()
+
+    finally:
+        cursor.close()
+
+    identities = {}
+
+    for name, member_id in rows:
+        if name is None or member_id is None:
+            continue
+
+        normalized_name = str(name).strip().upper()
+        normalized_id = str(member_id).strip()
+
+        if not normalized_name or not normalized_id:
+            continue
+
+        identities.setdefault(
+            normalized_name, set()
+        ).add(normalized_id)
+
+    return identities
+
+
+# --------------------------------------------------
+# 3. RUN MEMBER SOURCE
+# --------------------------------------------------
+
 def run_member_source(source_config, file_path=None):
     """
     Execute one configured member source.
 
-    1. Read and standardize source file.
-    2. Split valid and rejected records.
-    3. Load valid records into RAW.
-    4. Store rejected records in OPS quarantine.
-    5. Transform RAW into STG.
-    6. Process STG into CORE using SCD Type 2.
+    1. Read and standardize source records.
+    2. Run normal data validation.
+    3. Check identities across the complete source file.
+    4. Check identities against CORE history.
+    5. Quarantine invalid and conflicting records.
+    6. Load only eligible records into RAW.
+    7. Process RAW -> STG -> CORE.
     """
 
     source_file = (
@@ -64,7 +142,7 @@ def run_member_source(source_config, file_path=None):
     print("Source ID:", source_config["source_id"])
     print("Source file:", source_file.name)
 
-    # Step 1: Read, standardize, and validate source records.
+    # Step 1: Read, standardize and run normal validation.
     ingestion_result = run_member_ingestion(
         file_path=source_file,
         mapping_path=MAPPING_PATH,
@@ -73,20 +151,102 @@ def run_member_source(source_config, file_path=None):
         date_format=source_config.get("date_format")
     )
 
-    valid_df = ingestion_result["valid_data"]
-    rejected_df = ingestion_result["rejected_data"]
+    all_records_df = ingestion_result["data"].copy()
+    valid_df = ingestion_result["valid_data"].copy()
+    rejected_df = ingestion_result["rejected_data"].copy()
 
-    print("\nMember validation results:")
-    print("Total records:", ingestion_result["total_records"])
-    print("Valid records:", len(valid_df))
-    print("Rejected records:", len(rejected_df))
-
-    # Step 2: Load valid and rejected records.
+    identity_conflict_count = 0
     connection = None
 
     try:
+        # Step 2: Connect to Snowflake.
         connection = get_snowflake_connection()
 
+        # Step 3: Retrieve identities using ALL incoming rows,
+        # including rows that failed normal validation.
+        existing_identities = get_existing_member_identities(
+            connection,
+            all_records_df["member_name"].tolist()
+            if "member_name" in all_records_df.columns else []
+        )
+
+        # Step 4: Validate identities across the COMPLETE source file.
+        identity_result = validate_member_identity_records(
+            all_records_df,
+            existing_identities
+        )
+
+        identity_rejected_df = identity_result["rejected_records"]
+
+        identity_conflict_count = len(identity_rejected_df)
+
+        # Identify conflicts by original source row number.
+        # This prevents duplicate quarantine records.
+        conflict_row_numbers = set(
+            identity_rejected_df["_source_row_number"].tolist()
+        )
+
+        # Step 5: Remove identity-conflicting rows from valid records.
+        if not valid_df.empty:
+            valid_df = valid_df[
+                ~valid_df["_source_row_number"].isin(
+                    conflict_row_numbers
+                )
+            ].copy()
+
+        # Merge identity errors into existing validation rejects.
+        # Rows already rejected by normal validation are updated,
+        # not appended a second time.
+        identity_only_rejects = []
+
+        rejected_row_numbers = set(
+            rejected_df["_source_row_number"].tolist()
+        ) if not rejected_df.empty else set()
+
+        for _, identity_row in identity_rejected_df.iterrows():
+
+            source_row_number = identity_row["_source_row_number"]
+
+            identity_errors = identity_row["validation_errors"]
+
+            if source_row_number in rejected_row_numbers:
+                mask = (
+                    rejected_df["_source_row_number"]
+                    == source_row_number
+                )
+
+                existing_errors = rejected_df.loc[
+                    mask, "validation_errors"
+                ].iloc[0]
+
+                if not isinstance(existing_errors, list):
+                    existing_errors = []
+
+                rejected_df.loc[
+                    mask, "validation_errors"
+                ] = pd.Series(
+                    [existing_errors + identity_errors],
+                    index=rejected_df.index[mask]
+                )
+
+            else:
+                identity_only_rejects.append(identity_row)
+
+        if identity_only_rejects:
+            identity_only_df = pd.DataFrame(identity_only_rejects)
+
+            rejected_df = pd.concat(
+                [rejected_df, identity_only_df],
+                ignore_index=True
+            )
+
+        print("\nMember validation results:")
+        print("Total records:", ingestion_result["total_records"])
+        print("Valid records:", len(valid_df))
+        print("Rejected records:", len(rejected_df))
+        print("Identity conflicts:", identity_conflict_count)
+
+        # Step 6: Load eligible records into RAW and all rejects into OPS.
         load_result = load_member_data(
             connection=connection,
             df=valid_df,
@@ -102,16 +262,17 @@ def run_member_source(source_config, file_path=None):
 
     print("\nRAW and quarantine ingestion result:", load_result)
 
-    # Step 3 and 4: Process RAW -> STG -> CORE.
-    # Run even when RAW loading was skipped as a duplicate
-    # or when all records were rejected.
+    # Step 7: Process RAW -> STG -> CORE.
+    # This is still called when all rows are rejected or the file
+    # is skipped as a duplicate, matching the existing workflow.
     processing_result = run_member_processing()
 
     return {
         "ingestion": {
             "total_records": ingestion_result["total_records"],
             "valid_records": len(valid_df),
-            "rejected_records": len(rejected_df)
+            "rejected_records": len(rejected_df),
+            "identity_conflicts": identity_conflict_count
         },
         "raw_load": load_result,
         "transformation": processing_result,
@@ -119,15 +280,13 @@ def run_member_source(source_config, file_path=None):
     }
 
 
+# --------------------------------------------------
+# 4. RUN REDEMPTION SOURCE
+# --------------------------------------------------
+
 def run_redemption_source(source_config, file_path=None):
     """
     Execute one configured redemption JSON source.
-
-    1. Read nested JSON.
-    2. Validate redemption data.
-    3. Load into RAW_REDEMPTIONS with audit tracking.
-    4. Merge RAW into STG.
-    5. Merge STG into CORE.
     """
 
     source_file = (
@@ -138,14 +297,13 @@ def run_redemption_source(source_config, file_path=None):
 
     if not source_file.exists():
         raise FileNotFoundError(
-            f"Redemption source file not found: {source_file}"
+            f"Source file not found: {source_file}"
         )
 
     print("\nStarting redemption ingestion")
     print("Source ID:", source_config["source_id"])
     print("Source file:", source_file.name)
 
-    # Step 1: Read and validate JSON.
     data = read_file(
         source_file,
         source_config["format"]
@@ -159,7 +317,6 @@ def run_redemption_source(source_config, file_path=None):
             + "; ".join(validation_result["errors"])
         )
 
-    # Step 2: Load into RAW.
     connection = None
 
     try:
@@ -179,7 +336,6 @@ def run_redemption_source(source_config, file_path=None):
 
     print("\nRAW ingestion result:", load_result)
 
-    # Step 3 and 4: Process RAW -> STG -> CORE.
     processing_result = run_redemption_processing()
 
     return {
@@ -188,6 +344,10 @@ def run_redemption_source(source_config, file_path=None):
         "status": "SUCCESS"
     }
 
+
+# --------------------------------------------------
+# 5. RUN ALL ENABLED SOURCES
+# --------------------------------------------------
 
 def run_all_member_sources():
     """Run all enabled member and redemption sources."""
@@ -215,6 +375,10 @@ def run_all_member_sources():
                 source["entity"]
             )
 
+
+# --------------------------------------------------
+# 6. MAIN ENTRY POINT
+# --------------------------------------------------
 
 if __name__ == "__main__":
     run_all_member_sources()

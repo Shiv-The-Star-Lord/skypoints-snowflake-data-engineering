@@ -16,21 +16,31 @@ DATE_COLUMNS = [
 ]
 
 
+def _normalize_member_name(value):
+    if pd.isna(value):
+        return ""
+    return str(value).strip().upper()
+
+
+def _normalize_member_id(value):
+    if pd.isna(value):
+        return ""
+
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+
+    return str(value).strip()
+
+
 def validate_member_records(df):
     """
     Validate member records individually.
 
-    Returns:
-        valid_records: DataFrame containing valid records.
-        rejected_records: DataFrame containing invalid records,
-                          including their validation errors.
-        errors: List of validation errors.
+    Returns valid records, rejected records and validation errors.
     """
 
     df = df.copy()
 
-    # Schema-level validation: processing cannot continue
-    # if mandatory columns are completely absent.
     missing_columns = [
         column
         for column in REQUIRED_COLUMNS
@@ -85,6 +95,7 @@ def validate_member_records(df):
 
         parsed_dates = pd.to_datetime(
             df.loc[non_blank, column],
+            format="mixed",
             errors="coerce"
         )
 
@@ -118,7 +129,6 @@ def validate_member_records(df):
         for index in rejected_indexes
     ]
 
-    # 5. Build error summary
     errors = []
 
     for index in rejected_indexes:
@@ -127,6 +137,195 @@ def validate_member_records(df):
                 "row_index": index,
                 **error
             })
+
+    return {
+        "valid_records": valid_records,
+        "rejected_records": rejected_records,
+        "errors": errors,
+        "is_valid": len(rejected_records) == 0
+    }
+
+
+def validate_member_identity_records(df, existing_identities):
+    """
+    Detect identity conflicts across the complete incoming source file.
+
+    Rules:
+    1. Same name + same ID: allowed.
+    2. Same name + different IDs in the incoming file:
+       reject every identifiable row for that name.
+    3. Same name + different ID in CORE:
+       reject the incoming row.
+    4. Multiple IDs in CORE history for the same name:
+       reject the incoming row until the historical conflict is resolved.
+
+    Existing validation_errors are preserved and identity errors
+    are added rather than replacing them.
+    """
+
+    df = df.copy()
+
+    if df.empty:
+        return {
+            "valid_records": df.copy(),
+            "rejected_records": df.copy(),
+            "errors": [],
+            "is_valid": True
+        }
+
+    required = ["member_name", "member_id"]
+    missing = [column for column in required if column not in df.columns]
+
+    if missing:
+        raise ValueError(
+            f"Identity validation requires columns: {missing}"
+        )
+
+    def normalize_name(value):
+        if pd.isna(value):
+            return ""
+        return str(value).strip().upper()
+
+    def normalize_id(value):
+        if pd.isna(value):
+            return ""
+
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+
+        return str(value).strip()
+
+    normalized_existing = {}
+
+    for name, member_ids in existing_identities.items():
+        normalized_name = normalize_name(name)
+
+        if isinstance(member_ids, (set, list, tuple)):
+            values = member_ids
+        else:
+            values = [member_ids]
+
+        normalized_ids = {
+            normalize_id(value)
+            for value in values
+            if normalize_id(value)
+        }
+
+        if normalized_name:
+            normalized_existing.setdefault(
+                normalized_name, set()
+            ).update(normalized_ids)
+
+    working = df.copy()
+
+    working["_identity_name"] = (
+        working["member_name"].map(normalize_name)
+    )
+    working["_identity_id"] = (
+        working["member_id"].map(normalize_id)
+    )
+
+    # Only rows with both identity fields populated participate
+    # in identity comparisons. Missing fields remain normal DQ errors.
+    identifiable = working[
+        (working["_identity_name"] != "")
+        & (working["_identity_id"] != "")
+    ]
+
+    batch_identity_counts = (
+        identifiable.groupby("_identity_name")["_identity_id"]
+        .nunique()
+    )
+
+    conflicting_batch_names = set(
+        batch_identity_counts[
+            batch_identity_counts > 1
+        ].index
+    )
+
+    rejected_errors = {}
+    errors = []
+
+    for index, row in working.iterrows():
+        name = row["_identity_name"]
+        member_id = row["_identity_id"]
+
+        # No identity comparison is possible if either field is missing.
+        if not name or not member_id:
+            continue
+
+        existing_ids = normalized_existing.get(name, set())
+        conflict_message = None
+
+        if name in conflicting_batch_names:
+            conflict_message = (
+                f"Multiple different member IDs were found for "
+                f"member name '{name}' in the same incoming batch. "
+                f"All identifiable records for this name are rejected."
+            )
+
+        elif len(existing_ids) > 1:
+            conflict_message = (
+                f"CORE history contains multiple member IDs for "
+                f"member name '{name}'. Identity requires investigation."
+            )
+
+        elif existing_ids and member_id not in existing_ids:
+            existing_id = next(iter(existing_ids))
+
+            conflict_message = (
+                f"Member name '{name}' already exists in CORE "
+                f"with member ID '{existing_id}', but the incoming "
+                f"record has member ID '{member_id}'."
+            )
+
+        if conflict_message:
+            identity_error = {
+                "check": "IDENTITY_CONFLICT",
+                "column": "member_id",
+                "message": conflict_message
+            }
+
+            rejected_errors[index] = [identity_error]
+
+            errors.append({
+                "row_index": index,
+                **identity_error
+            })
+
+    rejected_indexes = list(rejected_errors.keys())
+
+    valid_records = df.drop(
+        index=rejected_indexes
+    ).copy()
+
+    rejected_records = df.loc[
+        rejected_indexes
+    ].copy()
+
+    if not rejected_records.empty:
+        if "validation_errors" in rejected_records.columns:
+            merged_errors = []
+
+            for index in rejected_indexes:
+                existing_errors = rejected_records.at[
+                    index, "validation_errors"
+                ]
+
+                if not isinstance(existing_errors, list):
+                    existing_errors = []
+
+                merged_errors.append(
+                    existing_errors + rejected_errors[index]
+                )
+
+            rejected_records["validation_errors"] = merged_errors
+
+        else:
+            rejected_records["validation_errors"] = [
+                rejected_errors[index]
+                for index in rejected_indexes
+            ]
 
     return {
         "valid_records": valid_records,
