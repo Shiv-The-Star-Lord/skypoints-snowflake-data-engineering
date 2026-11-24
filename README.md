@@ -125,22 +125,27 @@ snowflake-de-project/
 │   ├── 04_create_ingestion_audit.sql
 │   ├── 05_create_member_batch_control.sql
 │   ├── 06_create_rejected_member_records.sql
-│   ├── 07_create_staging_member_profiles.sql
-│   ├── 08_staging_redemption_transactions.sql
-│   ├── 09_create_core_member_profile.sql
-│   ├── 10_create_core_redemption_transactions.sql
-│   ├── 11_create_country_member_tables.sql
-│   ├── 12_initialize_member_batch_control.sql
-│   ├── 13_core_member_profile_scd2.sql
-│   ├── 14_core_member_profile_incremental.sql
-│   ├── 15_incremental_staging_member_profiles.sql
-│   ├── 16a_core_expire_current.sql
-│   ├── 17b_core_insert_versions.sql
-│   ├── 18_load_staging_redemption_transactions.sql
-│   ├── 19_merge_core_redemption_transactions.sql
-│   ├── 20_sync_country_member_tables.sql
-│   ├── 21_validate_redemption_member_reference.sql
-│   └── 22_data_quality_checks.sql
+│   ├── 07_create_rejected_redemption_records.sql
+│   ├── 08_create_staging_member_profiles.sql
+│   ├── 09_staging_redemption_transactions.sql
+│   ├── 10_create_core_member_profile.sql
+│   ├── 11_create_core_redemption_transactions.sql
+│   ├── 12_create_country_member_tables.sql
+│   ├── 13_create_mart_dim_date.sql
+│   ├── 14_create_mart_dim_member.sql
+│   ├── 15_create_mart_fact_redemption.sql
+│   ├── 16_initialize_member_batch_control.sql
+│   ├── 17_incremental_staging_member_profiles.sql
+│   ├── 18_core_expire_current.sql
+│   ├── 19_core_insert_versions.sql
+│   ├── 20_quarantine_redemption_transactions.sql
+│   ├── 21_load_staging_redemption_transactions.sql
+│   ├── 22_merge_core_redemption_transactions.sql
+│   ├── 23_sync_country_member_tables.sql
+│   ├── 24_validate_redemption_member_reference.sql
+│   ├── 25_data_quality_checks.sql
+│   ├── 26_legacy_core_member_profile_scd2.sql
+│   └── 27_legacy_core_member_profile_incremental.sql
 ├── tests/
 │   ├── test_core_processor.py
 │   ├── test_data_validator.py
@@ -306,11 +311,11 @@ Execute the relevant SQL setup scripts in your Snowflake environment.
 Start with:
 
 - `01_database_setup.sql` – creates the database and schemas.
-- `08_staging_redemption_transactions.sql` – creates the redemption staging table.
-- `10_create_core_redemption_transactions.sql` – creates the CORE redemption table.
+- `09_staging_redemption_transactions.sql` – creates the redemption staging table.
+- `11_create_core_redemption_transactions.sql` – creates the CORE redemption table.
 - `05_create_member_batch_control.sql` – creates the member batch control table.
 - `06_create_rejected_member_records.sql` – creates the rejected member records table.
-- `11_create_country_member_tables.sql` – creates country-specific member tables when required.
+- `12_create_country_member_tables.sql` – creates country-specific member tables when required.
 
 Ensure the required member RAW, STG, CORE, and ingestion audit tables are also present before running the Python pipeline.
 
@@ -394,8 +399,8 @@ SQL data quality checks include:
 
 Run the SQL validation scripts as required:
 
-- `21_validate_redemption_member_reference.sql`
-- `22_data_quality_checks.sql`
+- `24_validate_redemption_member_reference.sql`
+- `25_data_quality_checks.sql`
 
 ## 12. Running Tests
 

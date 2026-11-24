@@ -13,19 +13,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 QUARANTINE_SQL_PATH = (
     PROJECT_ROOT
     / "sql"
-    / "18a_quarantine_redemption_transactions.sql"
+    / "20_quarantine_redemption_transactions.sql"
 )
 
 STG_SQL_PATH = (
     PROJECT_ROOT
     / "sql"
-    / "18_load_staging_redemption_transactions.sql"
+    / "21_load_staging_redemption_transactions.sql"
 )
 
 CORE_SQL_PATH = (
     PROJECT_ROOT
     / "sql"
-    / "19_merge_core_redemption_transactions.sql"
+    / "22_merge_core_redemption_transactions.sql"
 )
 
 

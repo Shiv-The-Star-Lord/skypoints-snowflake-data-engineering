@@ -17,19 +17,19 @@ from python.utils.config_utils import (
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 INCREMENTAL_STG_SQL_PATH = (
-    PROJECT_ROOT / "sql" / "15_incremental_staging_member_profiles.sql"
+    PROJECT_ROOT / "sql" / "17_incremental_staging_member_profiles.sql"
 )
 
 EXPIRE_SQL_PATH = (
-    PROJECT_ROOT / "sql" / "16a_core_expire_current.sql"
+    PROJECT_ROOT / "sql" / "18_core_expire_current.sql"
 )
 
 INSERT_CORE_SQL_PATH = (
-    PROJECT_ROOT / "sql" / "17b_core_insert_versions.sql"
+    PROJECT_ROOT / "sql" / "19_core_insert_versions.sql"
 )
 
 COUNTRY_SYNC_SQL_PATH = (
-    PROJECT_ROOT / "sql" / "20_sync_country_member_tables.sql"
+    PROJECT_ROOT / "sql" / "23_sync_country_member_tables.sql"
 )
 
 

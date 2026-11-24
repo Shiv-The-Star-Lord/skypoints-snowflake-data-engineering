@@ -204,7 +204,7 @@ def test_core_sql_maps_derived_member_attributes():
     incremental_sql = read_sql_file(INSERT_CORE_SQL_PATH)
 
     initial_sql = read_sql_file(
-        project_root / "sql" / "13_core_member_profile_scd2.sql"
+        project_root / "sql" / "26_legacy_core_member_profile_scd2.sql"
     )
 
     for sql in [incremental_sql, initial_sql]:
