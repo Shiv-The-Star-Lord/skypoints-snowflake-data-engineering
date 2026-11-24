@@ -13,6 +13,10 @@ from python.utils.file_utils import (
     get_file_size
 )
 
+from python.utils.config_utils import (
+    get_fully_qualified_name
+)
+
 
 # --------------------------------------------------
 # 1. LOAD ENVIRONMENT VARIABLES
@@ -25,7 +29,22 @@ load_dotenv(ENV_FILE)
 
 
 # --------------------------------------------------
-# 2. SNOWFLAKE CONNECTION
+# 2. CONFIGURATION-DRIVEN TABLE RESOLUTION
+# --------------------------------------------------
+
+def get_table_name(object_key):
+    """
+    Resolve a fully qualified Snowflake table name.
+
+    Database: .env
+    Schema and table: source_config.json
+    """
+
+    return get_fully_qualified_name(object_key)
+
+
+# --------------------------------------------------
+# 3. SNOWFLAKE CONNECTION
 # --------------------------------------------------
 
 def get_snowflake_connection():
@@ -60,7 +79,7 @@ def get_snowflake_connection():
 
 
 # --------------------------------------------------
-# 3. AUDIT HELPER FUNCTIONS
+# 4. AUDIT HELPER FUNCTIONS
 # --------------------------------------------------
 
 def create_audit_record(
@@ -76,8 +95,10 @@ def create_audit_record(
 ):
     """Insert one ingestion attempt into OPS audit."""
 
-    sql = """
-        INSERT INTO SKYPOINTS_DE.OPS.INGESTION_AUDIT (
+    audit_table = get_table_name("ingestion_audit")
+
+    sql = f"""
+        INSERT INTO {audit_table} (
             BATCH_ID,
             SOURCE_ID,
             SOURCE_FILE,
@@ -109,9 +130,11 @@ def is_file_already_processed(cursor, source_id, checksum):
     """Check whether identical content from the same source
     has already completed successfully."""
 
-    sql = """
+    audit_table = get_table_name("ingestion_audit")
+
+    sql = f"""
         SELECT COUNT(*)
-        FROM SKYPOINTS_DE.OPS.INGESTION_AUDIT
+        FROM {audit_table}
         WHERE SOURCE_ID = %s
           AND FILE_CHECKSUM = %s
           AND STATUS = 'SUCCESS'
@@ -130,8 +153,10 @@ def update_audit_status(
 ):
     """Update the final ingestion status."""
 
-    sql = """
-        UPDATE SKYPOINTS_DE.OPS.INGESTION_AUDIT
+    audit_table = get_table_name("ingestion_audit")
+
+    sql = f"""
+        UPDATE {audit_table}
         SET
             STATUS = %s,
             COMPLETED_AT = CURRENT_TIMESTAMP(),
@@ -150,7 +175,7 @@ def update_audit_status(
 
 
 # --------------------------------------------------
-# 4. PREPARE MEMBER RECORDS
+# 5. PREPARE MEMBER RECORDS
 # --------------------------------------------------
 
 def prepare_member_records(df, source_file, batch_id):
@@ -220,7 +245,7 @@ def prepare_member_records(df, source_file, batch_id):
 
 
 # --------------------------------------------------
-# 5. PREPARE REJECTED MEMBER RECORDS
+# 6. PREPARE REJECTED MEMBER RECORDS
 # --------------------------------------------------
 
 def prepare_rejected_member_records(
@@ -229,9 +254,7 @@ def prepare_rejected_member_records(
     source_id,
     batch_id
 ):
-    """
-    Prepare one quarantine row per validation error.
-    """
+    """Prepare one quarantine row per validation error."""
 
     records = []
 
@@ -299,7 +322,7 @@ def prepare_rejected_member_records(
 
 
 # --------------------------------------------------
-# 6. INSERT REJECTED RECORDS INTO OPS
+# 7. INSERT REJECTED RECORDS INTO OPS
 # --------------------------------------------------
 
 def load_rejected_member_records(
@@ -324,8 +347,12 @@ def load_rejected_member_records(
     if not records:
         return 0
 
-    sql = """
-        INSERT INTO SKYPOINTS_DE.OPS.REJECTED_MEMBER_RECORDS (
+    rejected_table = get_table_name(
+        "rejected_member_records"
+    )
+
+    sql = f"""
+        INSERT INTO {rejected_table} (
             SOURCE_ID,
             SOURCE_FILE,
             SOURCE_ROW_NUMBER,
@@ -356,7 +383,7 @@ def load_rejected_member_records(
 
 
 # --------------------------------------------------
-# 7. LOAD MEMBER DATA INTO RAW AND QUARANTINE
+# 8. LOAD MEMBER DATA INTO RAW AND QUARANTINE
 # --------------------------------------------------
 
 def load_member_data(
@@ -455,6 +482,8 @@ def load_member_data(
 
         if records:
 
+            raw_table = get_table_name("member_raw")
+
             target_columns = [
                 "MEMBER_ID",
                 "MEMBER_NAME",
@@ -480,7 +509,7 @@ def load_member_data(
             )
 
             sql = f"""
-                INSERT INTO SKYPOINTS_DE.RAW.RAW_MEMBER_PROFILES
+                INSERT INTO {raw_table}
                 ({column_names})
                 VALUES ({placeholders})
             """
@@ -513,10 +542,10 @@ def load_member_data(
         print("Source file:", source_file)
         print("Source ID:", source_id)
         print("Valid records loaded:", len(records))
-        print("Rejected records:", (
-            len(rejected_df)
-            if rejected_df is not None else 0
-        ))
+        print(
+            "Rejected records:",
+            len(rejected_df) if rejected_df is not None else 0
+        )
         print("Quarantine entries:", rejected_record_count)
         print("Batch ID:", batch_id)
         print("Status: SUCCESS")
@@ -565,7 +594,7 @@ def load_member_data(
 
 
 # --------------------------------------------------
-# 8. LOAD REDEMPTION DATA INTO RAW
+# 9. LOAD REDEMPTION DATA INTO RAW
 # --------------------------------------------------
 
 def load_redemption_data(
@@ -576,8 +605,8 @@ def load_redemption_data(
     entity_type="REDEMPTION"
 ):
     """
-    Load nested redemption JSON into RAW_REDEMPTIONS
-    with duplicate-file detection and audit tracking.
+    Load nested redemption JSON into RAW with
+    duplicate-file detection and audit tracking.
     """
 
     file_path = Path(file_path)
@@ -645,8 +674,10 @@ def load_redemption_data(
             data["redemptions"]
         )
 
-        sql = """
-            INSERT INTO SKYPOINTS_DE.RAW.RAW_REDEMPTIONS (
+        raw_table = get_table_name("redemption_raw")
+
+        sql = f"""
+            INSERT INTO {raw_table} (
                 MEMBER_ID,
                 FEED_DATE,
                 REDEMPTION_DATA,
@@ -726,7 +757,7 @@ def load_redemption_data(
 
 
 # --------------------------------------------------
-# 9. MAIN EXECUTION
+# 10. MAIN EXECUTION
 # --------------------------------------------------
 
 if __name__ == "__main__":

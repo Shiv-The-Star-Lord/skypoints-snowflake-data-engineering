@@ -6,11 +6,11 @@ from python.snowflake_loader import get_snowflake_connection
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 EXPIRE_SQL_PATH = (
-    PROJECT_ROOT / "sql" / "04a_core_expire_current.sql"
+    PROJECT_ROOT / "sql" / "16a_core_expire_current.sql"
 )
 
 INSERT_SQL_PATH = (
-    PROJECT_ROOT / "sql" / "04b_core_insert_versions.sql"
+    PROJECT_ROOT / "sql" / "17b_core_insert_versions.sql"
 )
 
 

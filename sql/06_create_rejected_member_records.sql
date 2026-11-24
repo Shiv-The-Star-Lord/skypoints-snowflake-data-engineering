@@ -1,8 +1,12 @@
 
-USE DATABASE SKYPOINTS_DE;
-USE SCHEMA OPS;
+-- ============================================================
+-- SQL 16: CREATE REJECTED MEMBER RECORDS TABLE
+-- ============================================================
+-- Stores rejected source records and validation errors.
+-- Object name is resolved from config/source_config.json.
+-- ============================================================
 
-CREATE TABLE IF NOT EXISTS REJECTED_MEMBER_RECORDS
+CREATE TABLE IF NOT EXISTS __REJECTED_MEMBER_RECORDS_TABLE__
 (
     REJECTED_RECORD_ID VARCHAR(100) DEFAULT UUID_STRING(),
     SOURCE_ID VARCHAR(100),

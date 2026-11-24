@@ -32,9 +32,18 @@ def _normalize_member_id(value):
     return str(value).strip()
 
 
+def _normalize_country_code(value):
+    if pd.isna(value):
+        return ""
+    return str(value).strip().upper()
+
+
 def validate_member_records(df):
     """
     Validate member records individually.
+
+    Member identity is defined by:
+        (country_code, member_id)
 
     Returns valid records, rejected records and validation errors.
     """
@@ -61,8 +70,8 @@ def validate_member_records(df):
     for column in REQUIRED_COLUMNS:
 
         invalid_mask = (
-            df[column].isna() |
-            df[column].astype(str).str.strip().eq("")
+            df[column].isna()
+            | df[column].astype(str).str.strip().eq("")
         )
 
         for index in df.index[invalid_mask]:
@@ -72,14 +81,39 @@ def validate_member_records(df):
                 "message": f"{column} contains a null or blank value"
             })
 
-    # 2. Duplicate member ID validation
-    duplicate_mask = df["member_id"].duplicated(keep=False)
+    # 2. Duplicate composite identity validation
+    normalized_countries = (
+        df["country_code"].map(_normalize_country_code)
+    )
+
+    normalized_ids = (
+        df["member_id"].map(_normalize_member_id)
+    )
+
+    duplicate_mask = pd.DataFrame({
+        "country_code": normalized_countries,
+        "member_id": normalized_ids
+    }).duplicated(
+        subset=["country_code", "member_id"],
+        keep=False
+    )
+
+    # Do not report blank identities as duplicate identities.
+    identifiable_mask = (
+        normalized_countries.ne("")
+        & normalized_ids.ne("")
+    )
+
+    duplicate_mask = duplicate_mask & identifiable_mask
 
     for index in df.index[duplicate_mask]:
         row_errors[index].append({
-            "check": "DUPLICATE_MEMBER_ID",
-            "column": "member_id",
-            "message": "Duplicate member ID found in source file"
+            "check": "DUPLICATE_MEMBER_IDENTITY",
+            "column": "country_code, member_id",
+            "message": (
+                "Duplicate country code and member ID "
+                "combination found in source file."
+            )
         })
 
     # 3. Date validation
@@ -89,8 +123,8 @@ def validate_member_records(df):
             continue
 
         non_blank = (
-            df[column].notna() &
-            df[column].astype(str).str.strip().ne("")
+            df[column].notna()
+            & df[column].astype(str).str.strip().ne("")
         )
 
         parsed_dates = pd.to_datetime(
@@ -99,7 +133,9 @@ def validate_member_records(df):
             errors="coerce"
         )
 
-        invalid_indexes = parsed_dates[parsed_dates.isna()].index
+        invalid_indexes = parsed_dates[
+            parsed_dates.isna()
+        ].index
 
         for index in invalid_indexes:
             row_errors[index].append({
@@ -148,19 +184,25 @@ def validate_member_records(df):
 
 def validate_member_identity_records(df, existing_identities):
     """
-    Detect identity conflicts across the complete incoming source file.
+    Validate member identities against incoming records and CORE.
+
+    Identity key:
+        (country_code, member_id)
 
     Rules:
-    1. Same name + same ID: allowed.
-    2. Same name + different IDs in the incoming file:
-       reject every identifiable row for that name.
-    3. Same name + different ID in CORE:
-       reject the incoming row.
-    4. Multiple IDs in CORE history for the same name:
-       reject the incoming row until the historical conflict is resolved.
+    1. Same composite identity: same member.
+    2. Same member ID in different countries: allowed.
+    3. Same name with different composite identities: allowed.
+    4. Different member IDs in the same country: different members.
+    5. Existing CORE identity is compared using both country and ID.
 
-    Existing validation_errors are preserved and identity errors
-    are added rather than replacing them.
+    existing_identities must contain composite identity keys:
+        {
+            ("IND", "1"),
+            ("USA", "1")
+        }
+
+    Existing validation_errors are preserved.
     """
 
     df = df.copy()
@@ -173,116 +215,107 @@ def validate_member_identity_records(df, existing_identities):
             "is_valid": True
         }
 
-    required = ["member_name", "member_id"]
-    missing = [column for column in required if column not in df.columns]
+    required = ["country_code", "member_id"]
+
+    missing = [
+        column
+        for column in required
+        if column not in df.columns
+    ]
 
     if missing:
         raise ValueError(
             f"Identity validation requires columns: {missing}"
         )
 
-    def normalize_name(value):
-        if pd.isna(value):
-            return ""
-        return str(value).strip().upper()
+    if existing_identities is None:
+        existing_identities = set()
 
-    def normalize_id(value):
-        if pd.isna(value):
-            return ""
+    def normalize_identity(country_code, member_id):
+        return (
+            _normalize_country_code(country_code),
+            _normalize_member_id(member_id)
+        )
 
-        if isinstance(value, float) and value.is_integer():
-            return str(int(value))
+    # Normalize existing CORE identities.
+    normalized_existing = set()
 
-        return str(value).strip()
+    for identity in existing_identities:
 
-    normalized_existing = {}
+        if not isinstance(identity, (tuple, list)) or len(identity) != 2:
+            raise ValueError(
+                "Existing identities must use "
+                "(country_code, member_id) pairs."
+            )
 
-    for name, member_ids in existing_identities.items():
-        normalized_name = normalize_name(name)
+        country_code, member_id = normalize_identity(
+            identity[0],
+            identity[1]
+        )
 
-        if isinstance(member_ids, (set, list, tuple)):
-            values = member_ids
-        else:
-            values = [member_ids]
+        if country_code and member_id:
+            normalized_existing.add(
+                (country_code, member_id)
+            )
 
-        normalized_ids = {
-            normalize_id(value)
-            for value in values
-            if normalize_id(value)
-        }
-
-        if normalized_name:
-            normalized_existing.setdefault(
-                normalized_name, set()
-            ).update(normalized_ids)
-
+    # Normalize incoming identities.
     working = df.copy()
 
-    working["_identity_name"] = (
-        working["member_name"].map(normalize_name)
-    )
-    working["_identity_id"] = (
-        working["member_id"].map(normalize_id)
+    working["_identity_country"] = (
+        working["country_code"].map(_normalize_country_code)
     )
 
-    # Only rows with both identity fields populated participate
-    # in identity comparisons. Missing fields remain normal DQ errors.
+    working["_identity_id"] = (
+        working["member_id"].map(_normalize_member_id)
+    )
+
+    # Only complete identities participate in comparison.
     identifiable = working[
-        (working["_identity_name"] != "")
-        & (working["_identity_id"] != "")
+        working["_identity_country"].ne("")
+        & working["_identity_id"].ne("")
     ]
 
-    batch_identity_counts = (
-        identifiable.groupby("_identity_name")["_identity_id"]
-        .nunique()
+    # Detect duplicate composite identities in the incoming batch.
+    duplicate_mask = identifiable.duplicated(
+        subset=["_identity_country", "_identity_id"],
+        keep=False
     )
 
-    conflicting_batch_names = set(
-        batch_identity_counts[
-            batch_identity_counts > 1
-        ].index
+    duplicate_indexes = set(
+        identifiable.index[duplicate_mask]
     )
 
     rejected_errors = {}
     errors = []
 
     for index, row in working.iterrows():
-        name = row["_identity_name"]
+
+        country_code = row["_identity_country"]
         member_id = row["_identity_id"]
 
-        # No identity comparison is possible if either field is missing.
-        if not name or not member_id:
+        if not country_code or not member_id:
             continue
 
-        existing_ids = normalized_existing.get(name, set())
+        identity = (country_code, member_id)
         conflict_message = None
 
-        if name in conflicting_batch_names:
+        if index in duplicate_indexes:
             conflict_message = (
-                f"Multiple different member IDs were found for "
-                f"member name '{name}' in the same incoming batch. "
-                f"All identifiable records for this name are rejected."
+                f"Duplicate member identity found for "
+                f"country '{country_code}' and "
+                f"member ID '{member_id}' in the incoming batch."
             )
 
-        elif len(existing_ids) > 1:
-            conflict_message = (
-                f"CORE history contains multiple member IDs for "
-                f"member name '{name}'. Identity requires investigation."
-            )
-
-        elif existing_ids and member_id not in existing_ids:
-            existing_id = next(iter(existing_ids))
-
-            conflict_message = (
-                f"Member name '{name}' already exists in CORE "
-                f"with member ID '{existing_id}', but the incoming "
-                f"record has member ID '{member_id}'."
-            )
+        elif identity in normalized_existing:
+            # This identity already exists in CORE.
+            # It is the same member, not an identity conflict.
+            continue
 
         if conflict_message:
+
             identity_error = {
-                "check": "IDENTITY_CONFLICT",
-                "column": "member_id",
+                "check": "DUPLICATE_MEMBER_IDENTITY",
+                "column": "country_code, member_id",
                 "message": conflict_message
             }
 
@@ -303,29 +336,30 @@ def validate_member_identity_records(df, existing_identities):
         rejected_indexes
     ].copy()
 
+    # Preserve existing validation errors.
     if not rejected_records.empty:
-        if "validation_errors" in rejected_records.columns:
-            merged_errors = []
 
-            for index in rejected_indexes:
+        merged_errors = []
+
+        for index in rejected_indexes:
+
+            existing_errors = []
+
+            if "validation_errors" in rejected_records.columns:
+
                 existing_errors = rejected_records.at[
-                    index, "validation_errors"
+                    index,
+                    "validation_errors"
                 ]
 
                 if not isinstance(existing_errors, list):
                     existing_errors = []
 
-                merged_errors.append(
-                    existing_errors + rejected_errors[index]
-                )
+            merged_errors.append(
+                existing_errors + rejected_errors[index]
+            )
 
-            rejected_records["validation_errors"] = merged_errors
-
-        else:
-            rejected_records["validation_errors"] = [
-                rejected_errors[index]
-                for index in rejected_indexes
-            ]
+        rejected_records["validation_errors"] = merged_errors
 
     return {
         "valid_records": valid_records,
@@ -369,7 +403,9 @@ def validate_redemption_data(data):
 
     for field in required_fields:
         if field not in data or data[field] is None:
-            errors.append(f"Missing mandatory field: {field}")
+            errors.append(
+                f"Missing mandatory field: {field}"
+            )
 
     if errors:
         return {
@@ -387,14 +423,20 @@ def validate_redemption_data(data):
             errors="raise"
         )
     except (ValueError, TypeError):
-        errors.append("feed_date must use YYYYMMDD format.")
+        errors.append(
+            "feed_date must use YYYYMMDD format."
+        )
 
     redemptions = data["redemptions"]
 
     if not isinstance(redemptions, list):
-        errors.append("redemptions must be a JSON array.")
+
+        errors.append(
+            "redemptions must be a JSON array."
+        )
 
     else:
+
         transaction_fields = [
             "txn_id",
             "txn_date",
@@ -407,11 +449,13 @@ def validate_redemption_data(data):
 
             if not isinstance(transaction, dict):
                 errors.append(
-                    f"Redemption at index {index} must be a JSON object."
+                    f"Redemption at index {index} "
+                    "must be a JSON object."
                 )
                 continue
 
             for field in transaction_fields:
+
                 if (
                     field not in transaction
                     or transaction[field] is None
@@ -423,12 +467,14 @@ def validate_redemption_data(data):
                     )
 
             if "txn_date" in transaction:
+
                 try:
                     pd.to_datetime(
                         str(transaction["txn_date"]),
                         format="%Y%m%d",
                         errors="raise"
                     )
+
                 except (ValueError, TypeError):
                     errors.append(
                         f"Redemption at index {index}: "
@@ -436,8 +482,11 @@ def validate_redemption_data(data):
                     )
 
             if "miles_redeemed" in transaction:
+
                 try:
-                    miles = float(transaction["miles_redeemed"])
+                    miles = float(
+                        transaction["miles_redeemed"]
+                    )
 
                     if miles <= 0:
                         raise ValueError

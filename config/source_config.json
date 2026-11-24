@@ -1,61 +1,159 @@
-
 {
-  "project": "SKYPOINTS",
-  "sources": [
-    {
-      "source_id": "IND_MEMBERS",
-      "file_name": "IND.csv",
-      "format": "CSV",
-      "entity": "MEMBER_PROFILE",
-      "target_table": "RAW_MEMBER_PROFILES",
-      "default_country_code": "IND",
-      "enabled": true,
-      "options": {
-        "header": true,
-        "delimiter": ",",
-        "encoding": "UTF-8"
-      }
+    "project": "SKYPOINTS",
+    "snowflake": {
+        "schemas": [
+            "RAW",
+            "STG",
+            "CORE",
+            "MART",
+            "OPS"
+        ],
+        "objects": {
+            "member_raw": {
+                "schema": "RAW",
+                "table": "RAW_MEMBER_PROFILES"
+            },
+            "redemption_raw": {
+                "schema": "RAW",
+                "table": "RAW_REDEMPTIONS"
+            },
+            "member_staging": {
+                "schema": "STG",
+                "table": "STG_MEMBER_PROFILES"
+            },
+            "redemption_staging": {
+                "schema": "STG",
+                "table": "STG_REDEMPTION_TRANSACTIONS"
+            },
+            "member_core": {
+                "schema": "CORE",
+                "table": "MEMBER_PROFILE"
+            },
+            "member_india": {
+                "schema": "CORE",
+                "table": "MEMBER_PROFILE_IND"
+            },
+            "member_usa": {
+                "schema": "CORE",
+                "table": "MEMBER_PROFILE_USA"
+            },
+            "member_philippines": {
+                "schema": "CORE",
+                "table": "MEMBER_PROFILE_PHIL"
+            },
+            "member_canada": {
+                "schema": "CORE",
+                "table": "MEMBER_PROFILE_CAN"
+            },
+            "member_australia": {
+                "schema": "CORE",
+                "table": "MEMBER_PROFILE_AU"
+            },
+            "redemption_core": {
+                "schema": "CORE",
+                "table": "REDEMPTION_TRANSACTIONS"
+            },
+            "ingestion_audit": {
+                "schema": "OPS",
+                "table": "INGESTION_AUDIT"
+            },
+            "member_batch_control": {
+                "schema": "OPS",
+                "table": "MEMBER_BATCH_CONTROL"
+            },
+            "rejected_member_records": {
+                "schema": "OPS",
+                "table": "REJECTED_MEMBER_RECORDS"
+            },
+            "rejected_redemption_records": {
+                "schema": "OPS",
+                "table": "REJECTED_REDEMPTION_RECORDS"
+            },
+            "mart_dim_date": {
+                "schema": "MART",
+                "table": "DIM_DATE"
+            },
+            "mart_dim_member": {
+                "schema": "MART",
+                "table": "DIM_MEMBER"
+            },
+            "mart_fact_redemption": {
+                "schema": "MART",
+                "table": "FACT_REDEMPTION"
+            }
+        },
+        "country_codes": {
+            "india": "IND",
+            "usa": "USA",
+            "philippines": "PHIL",
+            "canada": "CAN",
+            "australia": "AU"
+        }
     },
-    {
-      "source_id": "USA_MEMBERS",
-      "file_name": "USA.xlsx",
-      "format": "XLSX",
-      "entity": "MEMBER_PROFILE",
-      "target_table": "RAW_MEMBER_PROFILES",
-      "default_country_code": "USA",
-      "date_format": "%m%d%Y",
-      "enabled": true,
-      "options": {}
-    },
-    {
-      "source_id": "AUS_MEMBERS",
-      "file_name": "AUS.xlsx",
-      "format": "XLSX",
-      "entity": "MEMBER_PROFILE",
-      "target_table": "RAW_MEMBER_PROFILES",
-      "default_country_code": "AU",
-      "enabled": true,
-      "options": {}
-    },
-    {
-      "source_id": "XML_MEMBERS",
-      "file_name": "member_profiles.xml",
-      "format": "XML",
-      "entity": "MEMBER_PROFILE",
-      "target_table": "RAW_MEMBER_PROFILES",
-      "enabled": false,
-      "options": {}
-    },
-    {
-      "source_id": "REDEMPTION_TRANSACTIONS",
-      "file_name": "redemption_transactions.json",
-      "format": "JSON",
-      "entity": "REDEMPTION",
-      "target_table": "RAW_REDEMPTIONS",
-      "enabled": true,
-      "options": {
-        "record_type": "NESTED_JSON"
-      }
-    }
-  ]
+    "sources": [
+        {
+            "source_id": "IND_MEMBERS",
+            "entity": "MEMBER_PROFILE",
+            "landing_directory": "data/raw/members",
+            "file_pattern": "IND*.csv",
+            "sample_file": "data/sample/members/IND.csv",
+            "format": "CSV",
+            "default_country_code": "IND",
+            "enabled": true,
+            "options": {
+                "header": true,
+                "delimiter": ",",
+                "encoding": "UTF-8"
+            },
+            "target_object": "member_raw"
+        },
+        {
+            "source_id": "USA_MEMBERS",
+            "entity": "MEMBER_PROFILE",
+            "landing_directory": "data/raw/members",
+            "file_pattern": "USA*.xlsx",
+            "sample_file": "data/sample/members/USA.xlsx",
+            "format": "XLSX",
+            "default_country_code": "USA",
+            "date_format": "%m%d%Y",
+            "enabled": true,
+            "options": {},
+            "target_object": "member_raw"
+        },
+        {
+            "source_id": "AUS_MEMBERS",
+            "entity": "MEMBER_PROFILE",
+            "landing_directory": "data/raw/members",
+            "file_pattern": "AUS*.xlsx",
+            "sample_file": "data/sample/members/AUS.xlsx",
+            "format": "XLSX",
+            "default_country_code": "AU",
+            "enabled": true,
+            "options": {},
+            "target_object": "member_raw"
+        },
+        {
+            "source_id": "XML_MEMBERS",
+            "entity": "MEMBER_PROFILE",
+            "landing_directory": "data/raw/members",
+            "file_pattern": "member_profiles*.xml",
+            "format": "XML",
+            "enabled": false,
+            "options": {},
+            "target_object": "member_raw"
+        },
+        {
+            "source_id": "REDEMPTION_TRANSACTIONS",
+            "entity": "REDEMPTION",
+            "landing_directory": "data/raw/redemptions",
+            "file_pattern": "redemption_transactions*.json",
+            "sample_file": "data/sample/redemptions/redemption_transactions.json",
+            "format": "JSON",
+            "enabled": true,
+            "options": {
+                "record_type": "NESTED_JSON"
+            },
+            "target_object": "redemption_raw"
+        }
+    ]
 }

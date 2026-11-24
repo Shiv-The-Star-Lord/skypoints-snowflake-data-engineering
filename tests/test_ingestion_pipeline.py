@@ -11,7 +11,7 @@ from python.ingestion.ingestion_pipeline import (
 )
 
 
-CSV_FILE = PROJECT_ROOT / "data/sample/IND.csv"
+CSV_FILE = PROJECT_ROOT / "data/sample/members/IND.csv"
 MAPPING_FILE = PROJECT_ROOT / "config/column_mapping.json"
 
 

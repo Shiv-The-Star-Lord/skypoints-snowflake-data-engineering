@@ -1,8 +1,12 @@
 
-import json
 from pathlib import Path
 
 import pandas as pd
+
+from python.utils.config_utils import (
+    load_project_config,
+    get_fully_qualified_name
+)
 
 from python.transformations.member_processor import (
     run_member_processing
@@ -32,7 +36,6 @@ from python.snowflake_loader import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-CONFIG_PATH = PROJECT_ROOT / "config" / "source_config.json"
 MAPPING_PATH = PROJECT_ROOT / "config" / "column_mapping.json"
 
 
@@ -41,77 +44,135 @@ MAPPING_PATH = PROJECT_ROOT / "config" / "column_mapping.json"
 # --------------------------------------------------
 
 def load_source_config():
-    """Load source definitions from JSON configuration."""
+    """Load the complete project configuration."""
 
-    with open(CONFIG_PATH, "r", encoding="utf-8") as file:
-        return json.load(file)
+    return load_project_config()
 
 
 # --------------------------------------------------
-# 2. GET EXISTING MEMBER IDENTITIES FROM CORE
+# 2. NORMALIZE MEMBER IDENTITY
 # --------------------------------------------------
 
-def get_existing_member_identities(connection, member_names):
+def normalize_identity_value(value):
+    """Normalize country codes and member IDs for comparison."""
+
+    if pd.isna(value):
+        return ""
+
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+
+    return str(value).strip().upper()
+
+
+# --------------------------------------------------
+# 3. GET EXISTING MEMBER IDENTITIES FROM CORE
+# --------------------------------------------------
+
+def get_existing_member_identities(connection, incoming_records):
     """
-    Retrieve all historical member IDs from CORE for incoming names.
+    Retrieve matching historical composite identities from CORE.
 
-    All SCD2 history is checked so an earlier identity conflict
-    cannot be hidden by looking only at current records.
+    Business identity:
+        COUNTRY_CODE + MEMBER_ID
+
+    All SCD2 history is checked, not only current records.
+
+    Returns:
+        {
+            ("IND", "1"),
+            ("USA", "1")
+        }
     """
 
-    normalized_names = sorted({
-        str(name).strip().upper()
-        for name in member_names
-        if name is not None
-        and not pd.isna(name)
-        and str(name).strip()
-    })
+    if incoming_records.empty:
+        return set()
 
-    if not normalized_names:
-        return {}
+    required_columns = {"country_code", "member_id"}
 
-    placeholders = ", ".join(
-        ["%s"] * len(normalized_names)
-    )
+    if not required_columns.issubset(incoming_records.columns):
+        return set()
+
+    incoming_identities = set()
+
+    for _, row in incoming_records.iterrows():
+
+        country_code = normalize_identity_value(
+            row["country_code"]
+        )
+
+        member_id = normalize_identity_value(
+            row["member_id"]
+        )
+
+        if country_code and member_id:
+            incoming_identities.add(
+                (country_code, member_id)
+            )
+
+    if not incoming_identities:
+        return set()
+
+    core_table = get_fully_qualified_name("member_core")
+
+    conditions = []
+    parameters = []
+
+    for country_code, member_id in sorted(incoming_identities):
+
+        conditions.append(
+            """
+            (
+                UPPER(TRIM(COUNTRY_CODE)) = %s
+                AND TRIM(TO_VARCHAR(MEMBER_ID)) = %s
+            )
+            """
+        )
+
+        parameters.extend([
+            country_code,
+            member_id
+        ])
 
     sql = f"""
         SELECT DISTINCT
-            UPPER(TRIM(MEMBER_NAME)) AS MEMBER_NAME,
+            UPPER(TRIM(COUNTRY_CODE)) AS COUNTRY_CODE,
             TRIM(TO_VARCHAR(MEMBER_ID)) AS MEMBER_ID
-        FROM SKYPOINTS_DE.CORE.MEMBER_PROFILE
-        WHERE UPPER(TRIM(MEMBER_NAME)) IN ({placeholders})
+        FROM {core_table}
+        WHERE {" OR ".join(conditions)}
     """
 
     cursor = connection.cursor()
 
     try:
-        cursor.execute(sql, tuple(normalized_names))
+        cursor.execute(sql, tuple(parameters))
         rows = cursor.fetchall()
 
     finally:
         cursor.close()
 
-    identities = {}
+    existing_identities = set()
 
-    for name, member_id in rows:
-        if name is None or member_id is None:
-            continue
+    for country_code, member_id in rows:
 
-        normalized_name = str(name).strip().upper()
-        normalized_id = str(member_id).strip()
+        normalized_country = normalize_identity_value(
+            country_code
+        )
 
-        if not normalized_name or not normalized_id:
-            continue
+        normalized_id = normalize_identity_value(
+            member_id
+        )
 
-        identities.setdefault(
-            normalized_name, set()
-        ).add(normalized_id)
+        if normalized_country and normalized_id:
+            existing_identities.add(
+                (normalized_country, normalized_id)
+            )
 
-    return identities
+    return existing_identities
 
 
 # --------------------------------------------------
-# 3. RUN MEMBER SOURCE
+# 4. RUN MEMBER SOURCE
 # --------------------------------------------------
 
 def run_member_source(source_config, file_path=None):
@@ -120,17 +181,17 @@ def run_member_source(source_config, file_path=None):
 
     1. Read and standardize source records.
     2. Run normal data validation.
-    3. Check identities across the complete source file.
+    3. Check composite identities across the source file.
     4. Check identities against CORE history.
     5. Quarantine invalid and conflicting records.
-    6. Load only eligible records into RAW.
+    6. Load eligible records into RAW.
     7. Process RAW -> STG -> CORE.
     """
 
     source_file = (
         Path(file_path)
         if file_path
-        else PROJECT_ROOT / "data" / "sample" / source_config["file_name"]
+        else PROJECT_ROOT / source_config["sample_file"]
     )
 
     if not source_file.exists():
@@ -147,7 +208,9 @@ def run_member_source(source_config, file_path=None):
         file_path=source_file,
         mapping_path=MAPPING_PATH,
         file_format=source_config["format"],
-        default_country_code=source_config.get("default_country_code"),
+        default_country_code=source_config.get(
+            "default_country_code"
+        ),
         date_format=source_config.get("date_format")
     )
 
@@ -162,15 +225,14 @@ def run_member_source(source_config, file_path=None):
         # Step 2: Connect to Snowflake.
         connection = get_snowflake_connection()
 
-        # Step 3: Retrieve identities using ALL incoming rows,
-        # including rows that failed normal validation.
+        # Step 3: Retrieve existing composite identities using
+        # all incoming rows, including normally rejected rows.
         existing_identities = get_existing_member_identities(
             connection,
-            all_records_df["member_name"].tolist()
-            if "member_name" in all_records_df.columns else []
+            all_records_df
         )
 
-        # Step 4: Validate identities across the COMPLETE source file.
+        # Step 4: Validate identities across the complete source.
         identity_result = validate_member_identity_records(
             all_records_df,
             existing_identities
@@ -181,7 +243,6 @@ def run_member_source(source_config, file_path=None):
         identity_conflict_count = len(identity_rejected_df)
 
         # Identify conflicts by original source row number.
-        # This prevents duplicate quarantine records.
         conflict_row_numbers = set(
             identity_rejected_df["_source_row_number"].tolist()
         )
@@ -195,13 +256,14 @@ def run_member_source(source_config, file_path=None):
             ].copy()
 
         # Merge identity errors into existing validation rejects.
-        # Rows already rejected by normal validation are updated,
-        # not appended a second time.
+        # Avoid inserting the same source row twice.
         identity_only_rejects = []
 
-        rejected_row_numbers = set(
-            rejected_df["_source_row_number"].tolist()
-        ) if not rejected_df.empty else set()
+        rejected_row_numbers = (
+            set(rejected_df["_source_row_number"].tolist())
+            if not rejected_df.empty
+            else set()
+        )
 
         for _, identity_row in identity_rejected_df.iterrows():
 
@@ -210,6 +272,7 @@ def run_member_source(source_config, file_path=None):
             identity_errors = identity_row["validation_errors"]
 
             if source_row_number in rejected_row_numbers:
+
                 mask = (
                     rejected_df["_source_row_number"]
                     == source_row_number
@@ -233,7 +296,10 @@ def run_member_source(source_config, file_path=None):
                 identity_only_rejects.append(identity_row)
 
         if identity_only_rejects:
-            identity_only_df = pd.DataFrame(identity_only_rejects)
+
+            identity_only_df = pd.DataFrame(
+                identity_only_rejects
+            )
 
             rejected_df = pd.concat(
                 [rejected_df, identity_only_df],
@@ -246,7 +312,7 @@ def run_member_source(source_config, file_path=None):
         print("Rejected records:", len(rejected_df))
         print("Identity conflicts:", identity_conflict_count)
 
-        # Step 6: Load eligible records into RAW and all rejects into OPS.
+        # Step 6: Load eligible records into RAW and rejects into OPS.
         load_result = load_member_data(
             connection=connection,
             df=valid_df,
@@ -262,9 +328,16 @@ def run_member_source(source_config, file_path=None):
 
     print("\nRAW and quarantine ingestion result:", load_result)
 
+    # Stop processing when the file was already ingested.
+    if load_result["status"] == "SKIPPED_DUPLICATE":
+
+        return {
+            "raw_load": load_result,
+            "transformation": None,
+            "status": "SKIPPED_DUPLICATE"
+        }
+
     # Step 7: Process RAW -> STG -> CORE.
-    # This is still called when all rows are rejected or the file
-    # is skipped as a duplicate, matching the existing workflow.
     processing_result = run_member_processing()
 
     return {
@@ -281,18 +354,16 @@ def run_member_source(source_config, file_path=None):
 
 
 # --------------------------------------------------
-# 4. RUN REDEMPTION SOURCE
+# 5. RUN REDEMPTION SOURCE
 # --------------------------------------------------
 
 def run_redemption_source(source_config, file_path=None):
-    """
-    Execute one configured redemption JSON source.
-    """
+    """Execute one configured redemption JSON source."""
 
     source_file = (
         Path(file_path)
         if file_path
-        else PROJECT_ROOT / "data" / "raw" / source_config["file_name"]
+        else PROJECT_ROOT / source_config["sample_file"]
     )
 
     if not source_file.exists():
@@ -336,6 +407,14 @@ def run_redemption_source(source_config, file_path=None):
 
     print("\nRAW ingestion result:", load_result)
 
+    if load_result["status"] == "SKIPPED_DUPLICATE":
+
+        return {
+            "raw_load": load_result,
+            "transformation": None,
+            "status": "SKIPPED_DUPLICATE"
+        }
+
     processing_result = run_redemption_processing()
 
     return {
@@ -346,11 +425,11 @@ def run_redemption_source(source_config, file_path=None):
 
 
 # --------------------------------------------------
-# 5. RUN ALL ENABLED SOURCES
+# 6. RUN ALL ENABLED SOURCES
 # --------------------------------------------------
 
 def run_all_member_sources():
-    """Run all enabled member and redemption sources."""
+    """Discover and process all matching production files."""
 
     config = load_source_config()
 
@@ -363,21 +442,51 @@ def run_all_member_sources():
             )
             continue
 
-        if source["entity"] == "MEMBER_PROFILE":
-            run_member_source(source)
+        landing_directory = (
+            PROJECT_ROOT / source["landing_directory"]
+        )
 
-        elif source["entity"] == "REDEMPTION":
-            run_redemption_source(source)
+        file_pattern = source["file_pattern"]
 
-        else:
+        matching_files = sorted(
+            landing_directory.glob(file_pattern)
+        )
+
+        if not matching_files:
             print(
-                "\nSkipping unsupported source entity:",
-                source["entity"]
+                "\nNo matching production files found for:",
+                source["source_id"]
             )
+            continue
+
+        for source_file in matching_files:
+
+            print("\nDiscovered production file:", source_file)
+
+            if source["entity"] == "MEMBER_PROFILE":
+
+                run_member_source(
+                    source,
+                    file_path=source_file
+                )
+
+            elif source["entity"] == "REDEMPTION":
+
+                run_redemption_source(
+                    source,
+                    file_path=source_file
+                )
+
+            else:
+
+                print(
+                    "\nSkipping unsupported source entity:",
+                    source["entity"]
+                )
 
 
 # --------------------------------------------------
-# 6. MAIN ENTRY POINT
+# 7. MAIN ENTRY POINT
 # --------------------------------------------------
 
 if __name__ == "__main__":

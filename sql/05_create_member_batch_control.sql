@@ -1,7 +1,12 @@
-USE DATABASE SKYPOINTS_DE;
-USE SCHEMA OPS;
 
-CREATE TABLE IF NOT EXISTS MEMBER_BATCH_CONTROL
+-- ============================================================
+-- SQL 13: CREATE MEMBER BATCH CONTROL TABLE
+-- ============================================================
+-- Creates the operational batch control table.
+-- Object name is resolved from config/source_config.json.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS __MEMBER_BATCH_CONTROL_TABLE__
 (
     BATCH_ID            VARCHAR(100) NOT NULL,
     SOURCE_ID           VARCHAR(100),
